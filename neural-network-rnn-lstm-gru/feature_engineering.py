@@ -1,6 +1,5 @@
 
 
-import argparse
 import os
 from pathlib import Path
 
@@ -18,6 +17,12 @@ EWM_COLUMNS = ["gmv", "searches", "to_cart", "to_ord"]
 EWM_HALF_LIVES = [7, 30]
 
 RECENCY_COLUMNS = ["gmv", "searches", "to_cart", "to_ord"]
+
+BASE_DIR = Path(__file__).resolve().parent
+SOURCE_DIR = BASE_DIR / "data_sequence"
+OUTPUT_DIR = BASE_DIR / "data_sequence_features"
+BATCH_SIZE = 250_000
+OVERWRITE = False
 
 REQUIRED_COLUMNS = [
     "event_date",
@@ -400,22 +405,20 @@ def read_user_batches(input_path, batch_size):
 
 
 def create_feature_file(
-    input_path,
-    output_path,
-    batch_size=250_000,
-    overwrite=False,
+    input_file,
+    output_file,
 ):
     """Создать parquet с исходными и новыми признаками."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    input_path = Path(input_path)
-    output_path = Path(output_path)
+    input_path = SOURCE_DIR / input_file
+    output_path = OUTPUT_DIR / output_file
 
-    if output_path.exists() and not overwrite:
+    if output_path.exists() and not OVERWRITE:
         raise FileExistsError(
             f"Файл уже существует: {output_path}. "
-            "Добавьте --overwrite для перезаписи."
+            "Поставьте OVERWRITE = True в начале файла для перезаписи."
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -426,7 +429,7 @@ def create_feature_file(
 
     try:
         for batch_number, batch in enumerate(
-            read_user_batches(input_path, batch_size),
+            read_user_batches(input_path, BATCH_SIZE),
             start=1,
         ):
             featured_batch, feature_columns = build_sequence_features(batch)
@@ -460,21 +463,28 @@ def create_feature_file(
     print(f"Готово: {output_path}")
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--batch-size", type=int, default=250_000)
-    parser.add_argument("--overwrite", action="store_true")
-    args = parser.parse_args()
-
-    create_feature_file(
-        input_path=args.input,
-        output_path=args.output,
-        batch_size=args.batch_size,
-        overwrite=args.overwrite,
-    )
-
-
 if __name__ == "__main__":
-    main()
+    create_feature_file(
+        "sequence_cutoff2025-08-17.parquet",
+        "sequence_cutoff2025-08-17_features.parquet",
+    )
+    create_feature_file(
+        "sequence_cutoff2025-09-16.parquet",
+        "sequence_cutoff2025-09-16_features.parquet",
+    )
+    create_feature_file(
+        "sequence_cutoff2025-10-16.parquet",
+        "sequence_cutoff2025-10-16_features.parquet",
+    )
+    create_feature_file(
+        "sequence_cutoff2025-11-15.parquet",
+        "sequence_cutoff2025-11-15_features.parquet",
+    )
+    create_feature_file(
+        "sequence_cutoff2025-12-15.parquet",
+        "sequence_cutoff2025-12-15_features.parquet",
+    )
+    create_feature_file(
+        "sequence_cutoff2026-01-14.parquet",
+        "sequence_cutoff2026-01-14_features.parquet",
+    )
