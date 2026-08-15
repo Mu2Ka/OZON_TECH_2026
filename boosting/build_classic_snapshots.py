@@ -6,7 +6,7 @@ import pyarrow.parquet as pq
 
 
 SOURCE = Path(r"C:\Users\myska\Downloads\train.parquet")
-OUTPUT_DIR = Path("data_classic")
+OUTPUT_DIR = Path("../data_classic")
 BATCH_SIZE = 200_000
 
 WINDOWS = (7, 14, 30, 60, 90, 180, 270)

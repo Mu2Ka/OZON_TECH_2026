@@ -1,7 +1,7 @@
 # Признаки классических временных срезов
 
 Этот файл описывает признаки, создаваемые скриптом
-[`build_classic_snapshots.py`](build_classic_snapshots.py), их формулы,
+[`build_classic_snapshots.py`](boosting/build_classic_snapshots.py), их формулы,
 риски утечки данных и возможность использования в production.
 
 Текущая версия генератора создаёт:
