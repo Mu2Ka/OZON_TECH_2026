@@ -20,6 +20,8 @@ Thumbs.db
 # Source datasets and generated snapshots
 data_classic/
 *.parquet
+neural-network-rnn-lstm-gru/data_sequence/
+*.parquet
 
 # Generated predictions and submissions
 submission*.csv
