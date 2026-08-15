@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Virtual environments and local packages
+.venv/
+venv/
+.local_packages/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Source datasets and generated snapshots
+data_classic/
+*.parquet
+
+# Generated predictions and submissions
+submission*.csv
+test_for_us_predictions*.csv
+hren.csv
+
+# Trained models and training artifacts
+*.cbm
+catboost_info/
+training_results*.json
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+~$*
