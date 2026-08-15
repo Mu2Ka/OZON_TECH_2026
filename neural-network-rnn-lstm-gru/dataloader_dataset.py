@@ -4,16 +4,14 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 
-def create_dataloader_dataset(data: pd.DataFrame):
-
-
+def create_dataloader_dataset(data: pd.DataFrame,batch_size = 128,shuffle = True):
     class MyDataset(Dataset):
         def __init__(self, data):
             self.data = data
             self.user_ids = data['user_id'].unique()
             self.groups = data.groupby('user_id', sort=False)
             self.feature_columns = [columns for columns in
-                                    self.data.columns not in ['user_id', 'target', 'day_index', '"event_date"']]
+                                    data.columns if columns not in ['user_id', 'target', 'day_index', '"event_date"']]
 
         def __len__(self):
             return len(self.user_ids)
@@ -36,6 +34,6 @@ def create_dataloader_dataset(data: pd.DataFrame):
         MyDataset(data),
         batch_size=512,
         shuffle=True,
-        num_workers=4,
+        num_workers=0,
     )
     return loader
