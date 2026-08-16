@@ -985,6 +985,14 @@ def build_snapshot(cutoff, output_file, make_target=True):
 
 if __name__ == "__main__":
     build_snapshot(
+        "2025-08-17",
+        "train_aug_predict_from_2025-08-17.parquet",
+    )
+    build_snapshot(
+        "2025-09-16",
+        "train_sep_predict_from_2025-09-16.parquet",
+    )
+    build_snapshot(
         "2025-10-16",
         "train_1_predict_from_2025-10-16.parquet",
     )
