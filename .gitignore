@@ -19,17 +19,20 @@ Thumbs.db
 
 # Source datasets and generated snapshots
 data_classic/
+data_sequence/
+data_sequence_features/
 *.parquet
 neural-network-rnn-lstm-gru/data_sequence/
-*.parquet
 
-# Generated predictions and submissions
-submission*.csv
+# Temporary predictions
 test_for_us_predictions*.csv
 hren.csv
 
 # Trained models and training artifacts
 *.cbm
+*.pt
+*.pth
+*.ckpt
 catboost_info/
 training_results*.json
 

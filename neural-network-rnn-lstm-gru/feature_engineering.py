@@ -465,26 +465,6 @@ def create_feature_file(
 
 if __name__ == "__main__":
     create_feature_file(
-        "sequence_cutoff2025-08-17.parquet",
-        "sequence_cutoff2025-08-17_features.parquet",
-    )
-    create_feature_file(
-        "sequence_cutoff2025-09-16.parquet",
-        "sequence_cutoff2025-09-16_features.parquet",
-    )
-    create_feature_file(
-        "sequence_cutoff2025-10-16.parquet",
-        "sequence_cutoff2025-10-16_features.parquet",
-    )
-    create_feature_file(
-        "sequence_cutoff2025-11-15.parquet",
-        "sequence_cutoff2025-11-15_features.parquet",
-    )
-    create_feature_file(
-        "sequence_cutoff2025-12-15.parquet",
-        "sequence_cutoff2025-12-15_features.parquet",
-    )
-    create_feature_file(
-        "sequence_cutoff2026-01-14.parquet",
-        "sequence_cutoff2026-01-14_features.parquet",
+        "sequence_cutoff2026-02-13.parquet",
+        "sequence_cutoff2026-02-13_features.parquet",
     )

@@ -107,4 +107,4 @@ def create_dataset(data: pd.DataFrame, cutoffs):
 
 
 if __name__ == "__main__":
-    create_dataset(df, cutoffs)
+    create_dataset(df,  [pd.Timestamp("2026-02-13")])
