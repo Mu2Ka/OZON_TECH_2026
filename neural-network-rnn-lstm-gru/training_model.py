@@ -7,6 +7,7 @@ import numpy as np
 from copy import deepcopy
 from dataloader_dataset import create_dataloader_dataset
 import gc
+from tqdm.auto import tqdm
 
 epochs = 100
 patience = 10
@@ -37,7 +38,11 @@ def pytorch_model_validation(
             print(f"Загружаем {train_file}")
             train_data = pd.read_parquet(train_file)
             train_loader = create_dataloader_dataset(train_data, batch_size=128, shuffle=True)
-            for features, target in train_loader:
+            for features, target in tqdm(
+                train_loader,
+                desc="Train batches",
+                leave=False,
+            ):
                 features = features.to(device)
                 target = target.to(device)
                 target_log = torch.log1p(target).to(device)
@@ -67,7 +72,11 @@ def pytorch_model_validation(
         valid_loader = create_dataloader_dataset(valid_data, batch_size=128, shuffle=False)
 
         with torch.no_grad():
-            for features, target in valid_loader:
+            for features, target in tqdm(
+                valid_loader,
+                desc="Validation batches",
+                leave=False,
+            ):
                 features = features.to(device)
                 target = target.to(device)
                 target_log = torch.log1p(target).to(device)
@@ -113,7 +122,11 @@ def pytorch_model_fit(model, train_files, epochs):
         model.train()
         train_loss_sum = 0
 
-        for X_batch, y_batch in train_loader:
+        for X_batch, y_batch in tqdm(
+            train_loader,
+            desc="Train batches",
+            leave=False,
+        ):
             optimizer.zero_grad()
             predictions = model(X_batch).reshape(-1)
             loss = criterion(predictions, y_batch)
@@ -145,7 +158,11 @@ def predict_model(model, test_files):
     targets_list = []
 
     with torch.inference_mode():
-        for X_batch, y_batch in test_loader:
+        for X_batch, y_batch in tqdm(
+            test_loader,
+            desc="Test batches",
+            leave=False,
+        ):
             predictions = model(X_batch).reshape(-1)
             loss = criterion(predictions, y_batch)
             test_loss_sum += loss.item() * len(X_batch)
@@ -158,3 +175,56 @@ def predict_model(model, test_files):
     test_targets = np.concatenate(targets_list)
 
     return test_loss, test_predictions, test_targets
+
+
+def evaluate_model(model, data_file, device, batch_size=128):
+    data = pd.read_parquet(data_file)
+    loader = create_dataloader_dataset(
+        data,
+        batch_size=batch_size,
+        shuffle=False,
+    )
+
+    model.eval()
+    squared_error_sum = 0
+    users_count = 0
+    predictions = []
+    targets = []
+
+    with torch.no_grad():
+        for features, target in tqdm(
+            loader,
+            desc="Evaluation batches",
+            leave=False,
+        ):
+            features = features.to(device)
+            target = target.to(device)
+
+            target_log = torch.log1p(target)
+            prediction_log = model(features)
+            prediction_log = torch.clamp(prediction_log, min=0)
+
+            squared_error_sum += torch.sum(
+                (prediction_log - target_log) ** 2
+            ).item()
+            users_count += len(target)
+
+            predictions.append(
+                torch.expm1(prediction_log).cpu().numpy()
+            )
+            targets.append(target.cpu().numpy())
+
+    rmsle = np.sqrt(squared_error_sum / users_count)
+
+    del loader
+    del data
+    gc.collect()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return (
+        rmsle,
+        np.concatenate(predictions),
+        np.concatenate(targets),
+    )
