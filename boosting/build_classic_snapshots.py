@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-
 SOURCE = Path(r"C:\Users\myska\Downloads\train.parquet")
 OUTPUT_DIR = Path("../data_classic")
 BATCH_SIZE = 200_000
@@ -131,24 +130,24 @@ def add_daily_flags(data):
     )
 
     data["active_day_flag"] = (
-        data["search_day_flag"].gt(0)
-        | data["cat_day_flag"].gt(0)
-        | data["cart_day_flag"].gt(0)
-        | data["order_day_flag"].gt(0)
-        | data["searches"].gt(0)
+            data["search_day_flag"].gt(0)
+            | data["cat_day_flag"].gt(0)
+            | data["cart_day_flag"].gt(0)
+            | data["order_day_flag"].gt(0)
+            | data["searches"].gt(0)
     ).astype("int8")
 
     data["search_and_cat_day_flag"] = (
-        data["search_day_flag"].gt(0)
-        & data["cat_day_flag"].gt(0)
+            data["search_day_flag"].gt(0)
+            & data["cat_day_flag"].gt(0)
     ).astype("int8")
     data["cart_without_order_day_flag"] = (
-        data["cart_day_flag"].gt(0)
-        & data["order_day_flag"].eq(0)
+            data["cart_day_flag"].gt(0)
+            & data["order_day_flag"].eq(0)
     ).astype("int8")
     data["active_without_order_day_flag"] = (
-        data["active_day_flag"].gt(0)
-        & data["order_day_flag"].eq(0)
+            data["active_day_flag"].gt(0)
+            & data["order_day_flag"].eq(0)
     ).astype("int8")
 
     data["gmv_square"] = data["gmv"].pow(2)
@@ -156,15 +155,15 @@ def add_daily_flags(data):
     data["searches_square"] = data["searches"].pow(2)
 
     day_number = (
-        data["event_date"] - pd.Timestamp("2025-01-01")
+            data["event_date"] - pd.Timestamp("2025-01-01")
     ).dt.days
     data["calendar_week"] = (day_number // 7).astype("int16")
     data["calendar_month"] = (
-        data["event_date"].dt.year * 12
-        + data["event_date"].dt.month
+            data["event_date"].dt.year * 12
+            + data["event_date"].dt.month
     ).astype("int16")
     data["weekend_flag"] = (
-        data["event_date"].dt.dayofweek >= 5
+            data["event_date"].dt.dayofweek >= 5
     ).astype("int8")
 
     return data
@@ -176,10 +175,10 @@ def iter_complete_user_chunks(parquet):
     carry = None
 
     for batch_number, batch in enumerate(
-        parquet.iter_batches(
-            batch_size=BATCH_SIZE,
-            columns=SOURCE_COLUMNS,
-        )
+            parquet.iter_batches(
+                batch_size=BATCH_SIZE,
+                columns=SOURCE_COLUMNS,
+            )
     ):
         chunk = batch.to_pandas()
         chunk["event_date"] = pd.to_datetime(chunk["event_date"])
@@ -268,7 +267,7 @@ def add_timing_and_regularity_features(result, data, cutoff):
         data["event_date"].between(history_start, cutoff)
     ].copy()
     history["days_ago"] = (
-        cutoff - history["event_date"]
+            cutoff - history["event_date"]
     ).dt.days
     feature_parts = []
 
@@ -295,7 +294,7 @@ def add_timing_and_regularity_features(result, data, cutoff):
         )
         timing[first_column] = timing[first_column].fillna(0)
         timing[span_column] = (
-            timing[first_column] - timing[last_column]
+                timing[first_column] - timing[last_column]
         ).clip(lower=0)
         feature_parts.append(timing)
 
@@ -324,6 +323,20 @@ def add_timing_and_regularity_features(result, data, cutoff):
             }
         )
         feature_parts.append(gap_features)
+
+        if event_name == "order":
+            gap_quantiles = events.groupby(
+                "user_id",
+                sort=False,
+            )["gap"].quantile([0.25, 0.75, 0.9]).unstack()
+            gap_quantiles = gap_quantiles.rename(
+                columns={
+                    0.25: f"order_gap_q25_{RECENCY_WINDOW}d",
+                    0.75: f"order_gap_q75_{RECENCY_WINDOW}d",
+                    0.9: f"order_gap_q90_{RECENCY_WINDOW}d",
+                }
+            )
+            feature_parts.append(gap_quantiles)
 
         events["new_streak"] = events.groupby(
             "user_id",
@@ -374,10 +387,10 @@ def add_timing_and_regularity_features(result, data, cutoff):
         ].copy()
         window["weekend_gmv"] = window["gmv"] * window["weekend_flag"]
         window["weekend_items_bought"] = (
-            window["to_ord"] * window["weekend_flag"]
+                window["to_ord"] * window["weekend_flag"]
         )
         window["weekend_active_day"] = (
-            window["active_day_flag"] * window["weekend_flag"]
+                window["active_day_flag"] * window["weekend_flag"]
         )
 
         weekend = window.groupby("user_id", sort=False).agg(
@@ -439,6 +452,109 @@ def add_timing_and_regularity_features(result, data, cutoff):
     )
     feature_parts.append(order_day_distribution)
 
+    recent_orders = order_rows.groupby(
+        "user_id",
+        sort=False,
+    ).tail(3).copy()
+    recent_orders["recent_order_rank"] = (
+        recent_orders.groupby("user_id", sort=False)
+        .cumcount(ascending=False)
+        .add(1)
+    )
+
+    recent_order_gmv = recent_orders.pivot(
+        index="user_id",
+        columns="recent_order_rank",
+        values="gmv",
+    ).reindex(columns=[1, 2, 3])
+    recent_order_gmv.columns = [
+        f"last_{rank}_order_day_gmv_{RECENCY_WINDOW}d"
+        for rank in recent_order_gmv.columns
+    ]
+    feature_parts.append(recent_order_gmv)
+
+    recent_order_items = recent_orders.pivot(
+        index="user_id",
+        columns="recent_order_rank",
+        values="to_ord",
+    ).reindex(columns=[1, 2, 3])
+    recent_order_items.columns = [
+        f"last_{rank}_order_day_items_bought_{RECENCY_WINDOW}d"
+        for rank in recent_order_items.columns
+    ]
+    feature_parts.append(recent_order_items)
+
+    order_rows_with_phase = order_rows.copy()
+    month_phase_labels = ["1_7", "8_15", "16_23", "24_end"]
+    day_of_month = order_rows_with_phase["event_date"].dt.day
+    order_rows_with_phase["month_phase"] = pd.cut(
+        day_of_month,
+        bins=[0, 7, 15, 23, 31],
+        labels=month_phase_labels,
+        include_lowest=True,
+    )
+    phase_counts = pd.crosstab(
+        order_rows_with_phase["user_id"],
+        order_rows_with_phase["month_phase"],
+    ).reindex(columns=month_phase_labels, fill_value=0)
+    phase_counts.columns = [
+        f"order_days_month_phase_{phase}_{RECENCY_WINDOW}d"
+        for phase in phase_counts.columns
+    ]
+    feature_parts.append(phase_counts)
+
+    phase_gmv = order_rows_with_phase.pivot_table(
+        index="user_id",
+        columns="month_phase",
+        values="gmv",
+        aggfunc="sum",
+    ).reindex(columns=month_phase_labels)
+    phase_gmv.columns = [
+        f"gmv_month_phase_{phase}_{RECENCY_WINDOW}d"
+        for phase in phase_gmv.columns
+    ]
+    feature_parts.append(phase_gmv)
+
+    last_order_date = order_rows.groupby(
+        "user_id",
+        sort=False,
+    )["event_date"].max()
+    after_last_order = history.loc[
+        history["event_date"].gt(
+            history["user_id"].map(last_order_date)
+        )
+    ].copy()
+    after_last_order["cart_value"] = after_last_order["to_cart"]
+    after_last_order["active_value"] = after_last_order["active_day_flag"]
+    after_last_order_features = after_last_order.groupby(
+        "user_id",
+        sort=False,
+    ).agg(
+        **{
+            f"searches_after_last_order_{RECENCY_WINDOW}d": (
+                "searches",
+                "sum",
+            ),
+            f"items_added_to_cart_after_last_order_{RECENCY_WINDOW}d": (
+                "cart_value",
+                "sum",
+            ),
+            f"search_days_after_last_order_{RECENCY_WINDOW}d": (
+                "search_day_flag",
+                "sum",
+            ),
+            f"cart_days_after_last_order_{RECENCY_WINDOW}d": (
+                "cart_day_flag",
+                "sum",
+            ),
+            f"active_days_after_last_order_{RECENCY_WINDOW}d": (
+                "active_value",
+                "sum",
+            ),
+        }
+    )
+    feature_parts.append(after_last_order_features)
+
     decay_source_columns = {
         "gmv": "gmv",
         "items_bought": "to_ord",
@@ -458,7 +574,7 @@ def add_timing_and_regularity_features(result, data, cutoff):
         for feature_name, source_column in decay_source_columns.items():
             weighted_column = f"weighted_{feature_name}"
             decay_data[weighted_column] = (
-                history[source_column] * weights
+                    history[source_column] * weights
             )
             aggregations[
                 f"decay_{feature_name}_halflife_{half_life}d"
@@ -576,19 +692,19 @@ def add_block_statistics(total, derived):
         derived[f"{metric}_block_max"] = values.max(axis=1)
         derived[f"{metric}_nonzero_blocks"] = nonzero_count
         derived[f"{metric}_zero_block_share"] = 1 - (
-            nonzero_count / NUMBER_OF_BLOCKS
+                nonzero_count / NUMBER_OF_BLOCKS
         )
         derived[f"{metric}_positive_block_mean"] = (
-            values.sum(axis=1)
-            / np.maximum(nonzero_count, 1)
+                values.sum(axis=1)
+                / np.maximum(nonzero_count, 1)
         )
         derived[f"{metric}_block_slope"] = (
-            values @ slope_weights / slope_denominator
+                values @ slope_weights / slope_denominator
         )
         derived[f"{metric}_block_ewm"] = values @ recent_weights
         derived[f"{metric}_recent_to_block_mean"] = (
-            (values[:, 0] + 1)
-            / (values.mean(axis=1) + 1)
+                (values[:, 0] + 1)
+                / (values.mean(axis=1) + 1)
         )
 
         zero = ~nonzero
@@ -655,7 +771,7 @@ def add_derived_features(total):
         )
 
         derived[f"recorded_zero_days_{days}d"] = (
-            total[f"recorded_days_{days}d"] - active_days
+                total[f"recorded_days_{days}d"] - active_days
         ).clip(lower=0)
         derived[f"order_days_per_active_day_{days}d"] = safe_ratio(
             order_days,
@@ -684,18 +800,18 @@ def add_derived_features(total):
 
         calendar_gmv_mean = gmv / days
         calendar_gmv_variance = (
-            total[f"gmv_square_sum_{days}d"] / days
-            - calendar_gmv_mean.pow(2)
+                total[f"gmv_square_sum_{days}d"] / days
+                - calendar_gmv_mean.pow(2)
         ).clip(lower=0)
         calendar_items_mean = items / days
         calendar_items_variance = (
-            total[f"items_bought_square_sum_{days}d"] / days
-            - calendar_items_mean.pow(2)
+                total[f"items_bought_square_sum_{days}d"] / days
+                - calendar_items_mean.pow(2)
         ).clip(lower=0)
         calendar_searches_mean = searches / days
         calendar_searches_variance = (
-            total[f"searches_square_sum_{days}d"] / days
-            - calendar_searches_mean.pow(2)
+                total[f"searches_square_sum_{days}d"] / days
+                - calendar_searches_mean.pow(2)
         ).clip(lower=0)
 
         gmv_std = np.sqrt(calendar_gmv_variance)
@@ -748,18 +864,18 @@ def add_derived_features(total):
     for metric in trend_metrics:
         recent_7 = total[f"{metric}_7d"]
         previous_7 = (
-            total[f"{metric}_14d"] - recent_7
+                total[f"{metric}_14d"] - recent_7
         ).clip(lower=0)
         recent_30 = total[f"{metric}_30d"]
         previous_30 = (
-            total[f"{metric}_60d"] - recent_30
+                total[f"{metric}_60d"] - recent_30
         ).clip(lower=0)
         recent_90 = total[f"{metric}_90d"]
         previous_90 = (
-            total[f"{metric}_180d"] - recent_90
+                total[f"{metric}_180d"] - recent_90
         ).clip(lower=0)
         older_150 = (
-            total[f"{metric}_180d"] - recent_30
+                total[f"{metric}_180d"] - recent_30
         ).clip(lower=0)
 
         derived[f"{metric}_trend_7_vs_previous_7"] = bounded_change(
@@ -834,19 +950,19 @@ def add_derived_features(total):
         total["cat_items_added_to_cart_180d"],
     )
     derived["search_gmv_share_change_30_vs_180"] = (
-        search_gmv_share_30 - search_gmv_share_180
+            search_gmv_share_30 - search_gmv_share_180
     )
     derived["cart_to_order_conversion_change_30_vs_180"] = (
-        total_conversion_30 - total_conversion_180
+            total_conversion_30 - total_conversion_180
     )
     derived["search_conversion_change_30_vs_180"] = (
-        search_conversion_30 - search_conversion_180
+            search_conversion_30 - search_conversion_180
     )
     derived["cat_conversion_change_30_vs_180"] = (
-        cat_conversion_30 - cat_conversion_180
+            cat_conversion_30 - cat_conversion_180
     )
     derived["channel_conversion_gap_30d"] = (
-        search_conversion_30 - cat_conversion_30
+            search_conversion_30 - cat_conversion_30
     )
 
     for event_name in ("activity", "order", "cart"):
@@ -857,18 +973,139 @@ def add_derived_features(total):
             mean_gap + 1,
         )
         derived[f"{event_name}_burstiness_{RECENCY_WINDOW}d"] = (
-            (std_gap - mean_gap)
-            / (std_gap + mean_gap + 1)
+                (std_gap - mean_gap)
+                / (std_gap + mean_gap + 1)
         )
 
     order_age = total[f"days_since_first_order_{RECENCY_WINDOW}d"]
     order_recency = total[f"days_since_last_order_{RECENCY_WINDOW}d"]
     order_frequency = total[f"order_days_{RECENCY_WINDOW}d"]
+    order_mean_gap = total[f"order_gap_mean_{RECENCY_WINDOW}d"]
+    order_median_gap = total[f"order_gap_median_{RECENCY_WINDOW}d"]
+    order_last_gap = total[f"order_gap_last_{RECENCY_WINDOW}d"]
+    order_gap_q25 = total[f"order_gap_q25_{RECENCY_WINDOW}d"]
+    order_gap_q75 = total[f"order_gap_q75_{RECENCY_WINDOW}d"]
+    order_gap_q90 = total[f"order_gap_q90_{RECENCY_WINDOW}d"]
+    has_order_history = (
+            1 - total[f"never_order_{RECENCY_WINDOW}d"]
+    )
+
+    derived[f"order_overdue_ratio_{RECENCY_WINDOW}d"] = (
+            safe_ratio(order_recency, order_median_gap + 1)
+            * has_order_history
+    )
+    derived[f"order_days_to_expected_{RECENCY_WINDOW}d"] = (
+            (order_median_gap - order_recency)
+            * has_order_history
+    )
+    derived[f"order_overdue_days_{RECENCY_WINDOW}d"] = (
+            (order_recency - order_median_gap).clip(lower=0)
+            * has_order_history
+    )
+    derived[f"order_expected_within_30d_{RECENCY_WINDOW}d"] = (
+            (order_recency + 30 >= order_median_gap)
+            & has_order_history.astype(bool)
+    ).astype("int8")
+    derived[f"order_cycle_phase_{RECENCY_WINDOW}d"] = (
+            safe_ratio(order_recency, order_median_gap + 1)
+            .clip(upper=5)
+            * has_order_history
+    )
+    derived[f"order_last_gap_to_median_{RECENCY_WINDOW}d"] = (
+            safe_ratio(order_last_gap, order_median_gap + 1)
+            * has_order_history
+    )
+    derived[f"order_last_gap_to_mean_{RECENCY_WINDOW}d"] = (
+            safe_ratio(order_last_gap, order_mean_gap + 1)
+            * has_order_history
+    )
+    derived[f"order_gap_iqr_{RECENCY_WINDOW}d"] = (
+            (order_gap_q75 - order_gap_q25).clip(lower=0)
+            * has_order_history
+    )
+    derived[f"order_gap_q90_to_median_{RECENCY_WINDOW}d"] = (
+            safe_ratio(order_gap_q90, order_median_gap + 1)
+            * has_order_history
+    )
+    derived[f"expected_orders_next_30d_{RECENCY_WINDOW}d"] = (
+            safe_ratio(
+                pd.Series(30, index=total.index),
+                order_median_gap + 1,
+            )
+            * has_order_history
+    )
+    derived[f"expected_orders_next_30d_with_overdue_{RECENCY_WINDOW}d"] = (
+            safe_ratio(
+                30 + derived[f"order_overdue_days_{RECENCY_WINDOW}d"],
+                order_median_gap + 1,
+            )
+            * has_order_history
+    )
+
+    last_1_gmv = total[f"last_1_order_day_gmv_{RECENCY_WINDOW}d"]
+    last_2_gmv = total[f"last_2_order_day_gmv_{RECENCY_WINDOW}d"]
+    last_3_gmv = total[f"last_3_order_day_gmv_{RECENCY_WINDOW}d"]
+    previous_two_gmv_mean = (last_2_gmv + last_3_gmv) / 2
+    derived[f"last_order_gmv_to_previous_two_mean_{RECENCY_WINDOW}d"] = (
+            safe_ratio(last_1_gmv, previous_two_gmv_mean + 1)
+            * has_order_history
+    )
+    derived[f"last_order_gmv_trend_vs_previous_two_{RECENCY_WINDOW}d"] = (
+            bounded_change(last_1_gmv, previous_two_gmv_mean)
+            * has_order_history
+    )
+
+    derived[f"searches_after_last_order_per_day_{RECENCY_WINDOW}d"] = (
+            safe_ratio(
+                total[f"searches_after_last_order_{RECENCY_WINDOW}d"],
+                order_recency + 1,
+            )
+            * has_order_history
+    )
+    derived[f"cart_items_after_last_order_per_day_{RECENCY_WINDOW}d"] = (
+            safe_ratio(
+                total[
+                    f"items_added_to_cart_after_last_order_{RECENCY_WINDOW}d"
+                ],
+                order_recency + 1,
+            )
+            * has_order_history
+    )
+    derived[f"active_share_after_last_order_{RECENCY_WINDOW}d"] = (
+            safe_ratio(
+                total[f"active_days_after_last_order_{RECENCY_WINDOW}d"],
+                order_recency + 1,
+            )
+            * has_order_history
+    )
+    derived[f"has_search_after_last_order_{RECENCY_WINDOW}d"] = (
+            total[f"search_days_after_last_order_{RECENCY_WINDOW}d"].gt(0)
+            & has_order_history.astype(bool)
+    ).astype("int8")
+    derived[f"has_cart_after_last_order_{RECENCY_WINDOW}d"] = (
+            total[f"cart_days_after_last_order_{RECENCY_WINDOW}d"].gt(0)
+            & has_order_history.astype(bool)
+    ).astype("int8")
+
+    for phase in ("1_7", "8_15", "16_23", "24_end"):
+        derived[f"order_days_month_phase_{phase}_share_{RECENCY_WINDOW}d"] = (
+            safe_ratio(
+                total[f"order_days_month_phase_{phase}_{RECENCY_WINDOW}d"],
+                order_frequency,
+            )
+        )
+        derived[f"gmv_month_phase_{phase}_share_{RECENCY_WINDOW}d"] = (
+            safe_ratio(
+                total[f"gmv_month_phase_{phase}_{RECENCY_WINDOW}d"],
+                total[f"gmv_{RECENCY_WINDOW}d"],
+            )
+        )
+
     derived[f"is_seen_{RECENCY_WINDOW}d"] = (
-        1 - total[f"never_activity_{RECENCY_WINDOW}d"]
+            1 - total[f"never_activity_{RECENCY_WINDOW}d"]
     )
     derived[f"btyd_frequency_{RECENCY_WINDOW}d"] = (
-        order_frequency - 1
+            order_frequency - 1
     ).clip(lower=0)
     derived[f"btyd_recency_{RECENCY_WINDOW}d"] = total[
         f"order_span_{RECENCY_WINDOW}d"
@@ -888,34 +1125,34 @@ def add_derived_features(total):
     )
 
     derived["engaged_nonbuyer_30d"] = (
-        total["active_days_30d"].gt(0)
-        & total["order_days_30d"].eq(0)
+            total["active_days_30d"].gt(0)
+            & total["order_days_30d"].eq(0)
     ).astype("int8")
     derived["recent_cart_without_order_30d"] = (
-        total["cart_days_30d"].gt(0)
-        & total["order_days_30d"].eq(0)
+            total["cart_days_30d"].gt(0)
+            & total["order_days_30d"].eq(0)
     ).astype("int8")
     derived["expected_gmv_from_recent_cart_30d"] = (
-        total["items_added_to_cart_30d"]
-        * safe_ratio(
-            total["items_bought_180d"],
-            total["items_added_to_cart_180d"],
-        )
-        * safe_ratio(
-            total["gmv_180d"],
-            total["items_bought_180d"],
-        )
+            total["items_added_to_cart_30d"]
+            * safe_ratio(
+        total["items_bought_180d"],
+        total["items_added_to_cart_180d"],
+    )
+            * safe_ratio(
+        total["gmv_180d"],
+        total["items_bought_180d"],
+    )
     )
     derived["search_intent_value_30d"] = (
-        total["searches_30d"]
-        * safe_ratio(
-            total["search_items_bought_180d"],
-            total["searches_180d"],
-        )
-        * safe_ratio(
-            total["gmv_search_180d"],
-            total["search_items_bought_180d"],
-        )
+            total["searches_30d"]
+            * safe_ratio(
+        total["search_items_bought_180d"],
+        total["searches_180d"],
+    )
+            * safe_ratio(
+        total["gmv_search_180d"],
+        total["search_items_bought_180d"],
+    )
     )
 
     add_block_statistics(total, derived)
@@ -994,19 +1231,19 @@ if __name__ == "__main__":
     )
     build_snapshot(
         "2025-10-16",
-        "train_1_predict_from_2025-10-16.parquet",
+        "train_oct_predict_from_2025-10-16.parquet",
     )
     build_snapshot(
         "2025-11-15",
-        "train_2_predict_from_2025-11-15.parquet",
+        "train_nov_predict_from_2025-11-15.parquet",
     )
     build_snapshot(
         "2025-12-15",
-        "train_3_predict_from_2025-12-15.parquet",
+        "train_dec_predict_from_2025-12-15.parquet",
     )
     build_snapshot(
         "2026-01-14",
-        "test_for_us_predict_from_2026-01-14.parquet",
+        "train_jan_predict_from_2025-12-15.parquet",
     )
     build_snapshot(
         "2026-02-13",
