@@ -508,6 +508,7 @@ def add_timing_and_regularity_features(result, data, cutoff):
         columns="month_phase",
         values="gmv",
         aggfunc="sum",
+        observed = False,
     ).reindex(columns=month_phase_labels)
     phase_gmv.columns = [
         f"gmv_month_phase_{phase}_{RECENCY_WINDOW}d"
