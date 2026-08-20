@@ -1,29 +1,20 @@
-from copy import deepcopy
 import gc
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from catboost import CatBoostRegressor
 from sklearn.metrics import root_mean_squared_error
-import torch
-from torch import nn
-from torch.optim import Adam
-from tqdm.auto import tqdm
-
-# Импортируем твою функцию создания DataLoader
-from dataloader_dataset import create_dataloader_dataset
 
 # ==========================================
-# 1. КОНФИГУРАЦИЯ И НАСТРОЙКИ
+# 1. КОНФИГУРАЦИЯ И ПУТИ
 # ==========================================
 DATA_DIR = Path("../data_classic")
-OOF_OUTPUT_PATH = Path("../oof_predictions_pytorch.parquet")
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+TEST_FILE = DATA_DIR / "test_data.parquet"  # Путь к новому датасету для теста
+OOF_OUTPUT_PATH = Path("../oof_predictions_catboost.parquet")
+TEST_PREDS_OUTPUT_PATH = Path("../test_predictions_catboost.parquet")
 
-EPOCHS = 100
-PATIENCE = 10
-BATCH_SIZE = 128
+EXCLUDE_COLUMNS = {"user_id", "cutoff_date", "target"}
 
-# Файлы срезов для Rolling Validation
 SNAPSHOT_FOLDS = [
     {
         "fold": 0,
@@ -53,175 +44,133 @@ SNAPSHOT_FOLDS = [
 
 
 # ==========================================
-# 2. ИСПРАВЛЕННЫЕ ФУНКЦИИ PYTORCH
+# 2. ОСНОВНАЯ ФУНКЦИЯ ОБУЧЕНИЯ И ПРЕДСКАЗАНИЯ
 # ==========================================
-def train_one_epoch(
-    model, train_files, optimizer, criterion, device, batch_size=128
-):
-    model.train()
-    epoch_train_loss = 0
-    train_users = 0
-
-    for train_file in train_files:
-        train_data = pd.read_parquet(train_file)
-        train_loader = create_dataloader_dataset(
-            train_data, batch_size=batch_size, shuffle=True
-        )
-
-        for features, target in tqdm(
-            train_loader, desc="Train batches", leave=False
-        ):
-            features = features.to(device)
-            target = target.to(device)
-            target_log = torch.log1p(target)
-
-            optimizer.zero_grad()
-            output = model(features).squeeze(-1)  # Защита от broadcasting
-            loss = criterion(output, target_log)
-            loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-
-            epoch_train_loss += loss.item() * len(target)
-            train_users += len(target)
-
-        del train_loader, train_data
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    return epoch_train_loss / train_users
-
-
-def predict_eval(model, valid_file, device, batch_size=128):
-    model.eval()
-    valid_data = pd.read_parquet(valid_file)
-    valid_loader = create_dataloader_dataset(
-        valid_data, batch_size=batch_size, shuffle=False
-    )
-
-    preds_log_list = []
-
-    with torch.no_grad():
-        for features, _ in tqdm(
-            valid_loader, desc="Validation batches", leave=False
-        ):
-            features = features.to(device)
-            output = model(features).squeeze(-1)
-            output_clamped = torch.clamp(output, min=0)  # log1p target >= 0
-            preds_log_list.append(output_clamped.cpu().numpy())
-
-    del valid_loader, valid_data
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    return np.concatenate(preds_log_list)
-
-
-# ==========================================
-# 3. ОСНОВНОЙ ЦИКЛ ROLLING VALIDATION (OOF)
-# ==========================================
-def run_pytorch_rolling_oof(
-    model_class, model_kwargs, epochs=EPOCHS, patience=PATIENCE
-):
+def train_catboost_rolling_oof_and_predict(test_path=TEST_FILE):
     oof_records = []
     fold_scores = []
+    test_fold_preds_log = []
+
+    # 1. Загрузка тестового датасета
+    print(f"Загружаем тестовый датасет: {test_path}")
+    test_df = pd.read_parquet(test_path)
 
     for fold_info in SNAPSHOT_FOLDS:
         fold = fold_info["fold"]
+        print(f"\n=================== START FOLD {fold} ===================")
+
+        # Загрузка Train данных фолда
+        train_dfs = [pd.read_parquet(p) for p in fold_info["train"]]
+        train_data = pd.concat(train_dfs, ignore_index=True)
+
+        feature_cols = [
+            c for c in train_data.columns if c not in EXCLUDE_COLUMNS
+        ]
+
+        X_train = train_data[feature_cols]
+        y_train_log = np.log1p(train_data["target"].values)
+
+        # Загрузка Val данных фолда
+        val_data = pd.read_parquet(fold_info["val"])
+        X_val = val_data[feature_cols]
+        y_val_true = val_data["target"].values
+        y_val_log = np.log1p(y_val_true)
+
+        # Данные для теста
+        X_test = test_df[feature_cols]
+
+        # Обучение CatBoost
+        model = CatBoostRegressor(
+            iterations=3000,
+            learning_rate=0.03,
+            depth=6,
+            loss_function="RMSE",
+            eval_metric="RMSE",
+            random_seed=42,
+            verbose=200,
+        )
+
+        model.fit(
+            X_train,
+            y_train_log,
+            eval_set=(X_val, y_val_log),
+            early_stopping_rounds=150,
+            use_best_model=True,
+        )
+
+        # 2. Валидационные предсказания (OOF)
+        val_pred_log = model.predict(X_val)
+        val_pred_log = np.clip(val_pred_log, a_min=0, a_max=None)
+        val_pred_orig = np.expm1(val_pred_log)
+
+        fold_rmsle = root_mean_squared_error(y_val_log, val_pred_log)
+        fold_scores.append(fold_rmsle)
+
+        # 3. Тестовые предсказания для текущего фолда
+        fold_test_pred_log = model.predict(X_test)
+        fold_test_pred_log = np.clip(fold_test_pred_log, a_min=0, a_max=None)
+        test_fold_preds_log.append(fold_test_pred_log)
+
+        # Вывод результатов текущего фолда
+        print(f"\n--- [FOLD {fold} SUMMARY] ---")
+        print(f"Validation RMSLE: {fold_rmsle:.5f}")
         print(
-            f"\n=================== START PYTORCH FOLD {fold} ==================="
+            f"Test Preds (log) -> Mean: {fold_test_pred_log.mean():.4f} | Std: {fold_test_pred_log.std():.4f}"
+        )
+        print(
+            f"Test Preds (orig) -> Mean: {np.expm1(fold_test_pred_log).mean():.4f}"
         )
 
-        # 1. Инициализация модели и оптимизатора для текущего фолда
-        model = model_class(**model_kwargs).to(DEVICE)
-        optimizer = Adam(model.parameters(), lr=0.001)
-        criterion = nn.MSELoss()
-
-        best_valid_loss = np.inf
-        best_model_weights = deepcopy(model.state_dict())
-        epoch_without_improvement = 0
-
-        # 2. Обучение с Early Stopping
-        for epoch in range(epochs):
-            train_loss = train_one_epoch(
-                model,
-                fold_info["train"],
-                optimizer,
-                criterion,
-                DEVICE,
-                BATCH_SIZE,
-            )
-
-            # Проверка на валидации
-            val_preds_log = predict_eval(
-                model, fold_info["val"], DEVICE, BATCH_SIZE
-            )
-            val_data = pd.read_parquet(fold_info["val"])
-            y_val_log = np.log1p(val_data["target"].values)
-
-            val_rmsle = root_mean_squared_error(y_val_log, val_preds_log)
-            print(
-                f"Epoch {epoch + 1:03d}/{epochs} | Train RMSLE: {train_loss**0.5:.5f} | Val RMSLE: {val_rmsle:.5f}"
-            )
-
-            if val_rmsle < best_valid_loss:
-                best_valid_loss = val_rmsle
-                best_model_weights = deepcopy(model.state_dict())
-                epoch_without_improvement = 0
-            else:
-                epoch_without_improvement += 1
-
-            if epoch_without_improvement >= patience:
-                print(f"Early stopping сработал на эпохе {epoch + 1}")
-                break
-
-        # 3. Получение лучших предсказаний для OOF
-        model.load_state_dict(best_model_weights)
-        final_pred_log = predict_eval(
-            model, fold_info["val"], DEVICE, BATCH_SIZE
-        )
-        final_pred_orig = np.expm1(final_pred_log)
-
-        val_df = pd.read_parquet(fold_info["val"])
-
-        # 4. Формирование обязательного формата OOF
+        # Сохранение OOF фолда
         fold_oof_df = pd.DataFrame(
             {
-                "user_id": val_df["user_id"].values,
-                "cutoff": val_df["cutoff_date"].values,
-                "target": val_df["target"].values,
-                "pred_log": final_pred_log,
-                "pred": final_pred_orig,
-                "model": "PyTorch",
+                "user_id": val_data["user_id"].values,
+                "cutoff": val_data["cutoff_date"].values,
+                "target": y_val_true,
+                "pred_log": val_pred_log,
+                "pred": val_pred_orig,
+                "model": "CatBoost",
                 "fold": fold,
             }
         )
         oof_records.append(fold_oof_df)
-        fold_scores.append(best_valid_loss)
 
-        del model, val_df
+        del train_dfs, train_data, val_data, X_train, X_val, model
         gc.collect()
 
-    # 5. Объединение и сохранение в Parquet
+    # ==========================================
+    # 3. АГРЕГАЦИЯ И СОХРАНЕНИЕ РЕЗУЛЬТАТОВ
+    # ==========================================
+    # Сохранение OOF
     total_oof_df = pd.concat(oof_records, ignore_index=True)
     total_oof_df.to_parquet(OOF_OUTPUT_PATH, index=False)
 
-    overall_rmsle = root_mean_squared_error(
-        np.log1p(total_oof_df["target"].values), total_oof_df["pred_log"].values
+    # Усреднение предсказаний со всех фолдов для теста
+    avg_test_pred_log = np.mean(test_fold_preds_log, axis=0)
+    avg_test_pred_orig = np.expm1(avg_test_pred_log)
+
+    test_result_df = pd.DataFrame(
+        {
+            "user_id": test_df["user_id"].values,
+            "pred_log": avg_test_pred_log,
+            "pred": avg_test_pred_orig,
+        }
     )
 
-    print("\n=================== ИТОГИ OOF (PyTorch) ===================")
+    # Добавляем колонки с предсказаниями отдельных фолдов, чтобы их можно было оценить
+    for i, fold_pred in enumerate(test_fold_preds_log):
+        test_result_df[f"pred_log_fold_{i}"] = fold_pred
+
+    test_result_df.to_parquet(TEST_PREDS_OUTPUT_PATH, index=False)
+
+    print("\n=================== ИТОГИ ===================")
     print(f"Mean Fold RMSLE: {np.mean(fold_scores):.5f}")
-    print(f"Overall OOF RMSLE: {overall_rmsle:.5f}")
-    print(f"Файл успешно сохранён: {OOF_OUTPUT_PATH.resolve()}")
-    print(f"Всего строк в OOF: {len(total_oof_df)}")
+    print(f"OOF сохранен в: {OOF_OUTPUT_PATH.resolve()}")
+    print(f"Тестовые предсказания сохранены в: {TEST_PREDS_OUTPUT_PATH.resolve()}")
+
+    return test_result_df
 
 
-# ==========================================
-# 4. ЗАПУСК (Передай сюда свою PyTorch модель)
-# ==========================================
-# Пример вызова:
-# run_pytorch_rolling_oof(MyModelClass, model_kwargs={"input_dim": 64})
+if __name__ == "__main__":
+    # Запуск функции на новом тестовом датасете
+    train_catboost_rolling_oof_and_predict(test_path=TEST_FILE)
