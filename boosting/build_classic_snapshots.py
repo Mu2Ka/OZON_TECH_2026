@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-
 SOURCE = Path(r"C:\Users\myska\Downloads\train.parquet")
 OUTPUT_DIR = Path("../data_classic")
 BATCH_SIZE = 200_000
@@ -102,9 +101,7 @@ def safe_ratio(numerator, denominator):
 def bounded_change(recent, previous):
     """Симметричное изменение в диапазоне примерно от -1 до 1."""
 
-    return (recent - previous).div(
-        recent.abs() + previous.abs() + 1
-    )
+    return (recent - previous).div(recent.abs() + previous.abs() + 1)
 
 
 def add_daily_flags(data):
@@ -123,12 +120,8 @@ def add_daily_flags(data):
     data["search_to_order_day_flag"] = (
         data["has_search_to_ord"].gt(0).astype("int8")
     )
-    data["cat_to_cart_day_flag"] = (
-        data["has_cat_to_cart"].gt(0).astype("int8")
-    )
-    data["cat_to_order_day_flag"] = (
-        data["has_cat_to_ord"].gt(0).astype("int8")
-    )
+    data["cat_to_cart_day_flag"] = data["has_cat_to_cart"].gt(0).astype("int8")
+    data["cat_to_order_day_flag"] = data["has_cat_to_ord"].gt(0).astype("int8")
 
     data["active_day_flag"] = (
         data["search_day_flag"].gt(0)
@@ -139,33 +132,25 @@ def add_daily_flags(data):
     ).astype("int8")
 
     data["search_and_cat_day_flag"] = (
-        data["search_day_flag"].gt(0)
-        & data["cat_day_flag"].gt(0)
+        data["search_day_flag"].gt(0) & data["cat_day_flag"].gt(0)
     ).astype("int8")
     data["cart_without_order_day_flag"] = (
-        data["cart_day_flag"].gt(0)
-        & data["order_day_flag"].eq(0)
+        data["cart_day_flag"].gt(0) & data["order_day_flag"].eq(0)
     ).astype("int8")
     data["active_without_order_day_flag"] = (
-        data["active_day_flag"].gt(0)
-        & data["order_day_flag"].eq(0)
+        data["active_day_flag"].gt(0) & data["order_day_flag"].eq(0)
     ).astype("int8")
 
     data["gmv_square"] = data["gmv"].pow(2)
     data["items_bought_square"] = data["to_ord"].pow(2)
     data["searches_square"] = data["searches"].pow(2)
 
-    day_number = (
-        data["event_date"] - pd.Timestamp("2025-01-01")
-    ).dt.days
+    day_number = (data["event_date"] - pd.Timestamp("2025-01-01")).dt.days
     data["calendar_week"] = (day_number // 7).astype("int16")
     data["calendar_month"] = (
-        data["event_date"].dt.year * 12
-        + data["event_date"].dt.month
+        data["event_date"].dt.year * 12 + data["event_date"].dt.month
     ).astype("int16")
-    data["weekend_flag"] = (
-        data["event_date"].dt.dayofweek >= 5
-    ).astype("int8")
+    data["weekend_flag"] = (data["event_date"].dt.dayofweek >= 5).astype("int8")
 
     return data
 
@@ -211,9 +196,7 @@ def iter_complete_user_chunks(parquet):
 
 def aggregate_window(data, cutoff, days):
     start = cutoff - pd.Timedelta(days=days - 1)
-    window = data.loc[
-        data["event_date"].between(start, cutoff)
-    ]
+    window = data.loc[data["event_date"].between(start, cutoff)]
 
     features = (
         window.groupby("user_id", sort=False)
@@ -229,16 +212,10 @@ def aggregate_30d_blocks(data, cutoff):
     result = None
 
     for block_number in range(NUMBER_OF_BLOCKS):
-        block_end = cutoff - pd.Timedelta(
-            days=block_number * BLOCK_DAYS
-        )
-        block_start = block_end - pd.Timedelta(
-            days=BLOCK_DAYS - 1
-        )
+        block_end = cutoff - pd.Timedelta(days=block_number * BLOCK_DAYS)
+        block_start = block_end - pd.Timedelta(days=BLOCK_DAYS - 1)
 
-        block = data.loc[
-            data["event_date"].between(block_start, block_end)
-        ]
+        block = data.loc[data["event_date"].between(block_start, block_end)]
         block_features = block.groupby(
             "user_id",
             sort=False,
@@ -261,15 +238,11 @@ def aggregate_30d_blocks(data, cutoff):
 def add_timing_and_regularity_features(result, data, cutoff):
     """RFM-recency, возраст истории, интервалы и регулярность."""
 
-    history_start = cutoff - pd.Timedelta(
-        days=RECENCY_WINDOW - 1
-    )
+    history_start = cutoff - pd.Timedelta(days=RECENCY_WINDOW - 1)
     history = data.loc[
         data["event_date"].between(history_start, cutoff)
     ].copy()
-    history["days_ago"] = (
-        cutoff - history["event_date"]
-    ).dt.days
+    history["days_ago"] = (cutoff - history["event_date"]).dt.days
     feature_parts = []
 
     for event_name, flag_column in EVENT_FLAGS.items():
@@ -277,9 +250,9 @@ def add_timing_and_regularity_features(result, data, cutoff):
             history[flag_column].gt(0),
             ["user_id", "days_ago"],
         ]
-        timing = events.groupby("user_id", sort=False)[
-            "days_ago"
-        ].agg(["min", "max"])
+        timing = events.groupby("user_id", sort=False)["days_ago"].agg(
+            ["min", "max"]
+        )
 
         last_column = f"days_since_last_{event_name}_{RECENCY_WINDOW}d"
         first_column = f"days_since_first_{event_name}_{RECENCY_WINDOW}d"
@@ -290,9 +263,7 @@ def add_timing_and_regularity_features(result, data, cutoff):
             columns={"min": last_column, "max": first_column}
         )
         timing[never_column] = timing[last_column].isna().astype("int8")
-        timing[last_column] = timing[last_column].fillna(
-            RECENCY_WINDOW + 1
-        )
+        timing[last_column] = timing[last_column].fillna(RECENCY_WINDOW + 1)
         timing[first_column] = timing[first_column].fillna(0)
         timing[span_column] = (
             timing[first_column] - timing[last_column]
@@ -305,15 +276,29 @@ def add_timing_and_regularity_features(result, data, cutoff):
             history[flag_column].gt(0),
             ["user_id", "event_date"],
         ].copy()
-        events["gap"] = events.groupby(
-            "user_id",
-            sort=False,
-        )["event_date"].diff().dt.days
+        events["gap"] = (
+            events.groupby(
+                "user_id",
+                sort=False,
+            )["event_date"]
+            .diff()
+            .dt.days
+        )
 
         gap_features = events.groupby(
             "user_id",
             sort=False,
-        )["gap"].agg(["mean", "median", "std", "max", "last"])
+        )["gap"].agg(
+            [
+                "mean",
+                "median",
+                "std",
+                "max",
+                "last",
+                lambda x: x.quantile(0.75) - x.quantile(0.25),
+                lambda x: x.quantile(0.90),
+            ]
+        )
         gap_features = gap_features.rename(
             columns={
                 "mean": f"{event_name}_gap_mean_{RECENCY_WINDOW}d",
@@ -321,14 +306,20 @@ def add_timing_and_regularity_features(result, data, cutoff):
                 "std": f"{event_name}_gap_std_{RECENCY_WINDOW}d",
                 "max": f"{event_name}_gap_max_{RECENCY_WINDOW}d",
                 "last": f"{event_name}_gap_last_{RECENCY_WINDOW}d",
+                "<lambda_0>": f"{event_name}_gap_iqr_{RECENCY_WINDOW}d",
+                "<lambda_1>": f"{event_name}_gap_q90_{RECENCY_WINDOW}d",
             }
         )
         feature_parts.append(gap_features)
 
-        events["new_streak"] = events.groupby(
-            "user_id",
-            sort=False,
-        )["event_date"].diff().dt.days.ne(1)
+        events["new_streak"] = (
+            events.groupby(
+                "user_id",
+                sort=False,
+            )["event_date"]
+            .diff()
+            .dt.days.ne(1)
+        )
         events["streak_id"] = events.groupby(
             "user_id",
             sort=False,
@@ -349,10 +340,10 @@ def add_timing_and_regularity_features(result, data, cutoff):
         flag_column = EVENT_FLAGS[event_name]
         events = history.loc[history[flag_column].gt(0)]
 
-        weeks = events.groupby("user_id", sort=False)[
-            "calendar_week"
-        ].nunique().rename(
-            f"{event_name}_weeks_{RECENCY_WINDOW}d"
+        weeks = (
+            events.groupby("user_id", sort=False)["calendar_week"]
+            .nunique()
+            .rename(f"{event_name}_weeks_{RECENCY_WINDOW}d")
         )
         feature_parts.append(weeks.to_frame())
 
@@ -360,10 +351,10 @@ def add_timing_and_regularity_features(result, data, cutoff):
         flag_column = EVENT_FLAGS[event_name]
         events = history.loc[history[flag_column].gt(0)]
 
-        months = events.groupby("user_id", sort=False)[
-            "calendar_month"
-        ].nunique().rename(
-            f"{event_name}_months_{RECENCY_WINDOW}d"
+        months = (
+            events.groupby("user_id", sort=False)["calendar_month"]
+            .nunique()
+            .rename(f"{event_name}_months_{RECENCY_WINDOW}d")
         )
         feature_parts.append(months.to_frame())
 
@@ -413,13 +404,9 @@ def add_timing_and_regularity_features(result, data, cutoff):
         .rename(
             columns={
                 "gmv": f"last_order_day_gmv_{RECENCY_WINDOW}d",
-                "gmv_search": (
-                    f"last_order_day_gmv_search_{RECENCY_WINDOW}d"
-                ),
+                "gmv_search": f"last_order_day_gmv_search_{RECENCY_WINDOW}d",
                 "gmv_cat": f"last_order_day_gmv_cat_{RECENCY_WINDOW}d",
-                "to_ord": (
-                    f"last_order_day_items_bought_{RECENCY_WINDOW}d"
-                ),
+                "to_ord": f"last_order_day_items_bought_{RECENCY_WINDOW}d",
             }
         )
         .drop(columns="event_date")
@@ -451,9 +438,7 @@ def add_timing_and_regularity_features(result, data, cutoff):
             0.5,
             history["days_ago"] / half_life,
         )
-        decay_data = pd.DataFrame(
-            {"user_id": history["user_id"]}
-        )
+        decay_data = pd.DataFrame({"user_id": history["user_id"]})
         aggregations = {}
         for feature_name, source_column in decay_source_columns.items():
             weighted_column = f"weighted_{feature_name}"
@@ -485,9 +470,7 @@ def add_timing_and_regularity_features(result, data, cutoff):
         never_column = f"never_{event_name}_{RECENCY_WINDOW}d"
 
         result[never_column] = result[never_column].fillna(1)
-        result[last_column] = result[last_column].fillna(
-            RECENCY_WINDOW + 1
-        )
+        result[last_column] = result[last_column].fillna(RECENCY_WINDOW + 1)
         result[first_column] = result[first_column].fillna(0)
         result[span_column] = result[span_column].fillna(0)
 
@@ -501,13 +484,9 @@ def build_chunk_features(data, cutoff, make_target):
     )
     relevant_start = cutoff - pd.Timedelta(days=RECENCY_WINDOW - 1)
     relevant_end = (
-        cutoff + pd.Timedelta(days=30)
-        if make_target
-        else cutoff
+        cutoff + pd.Timedelta(days=30) if make_target else cutoff
     )
-    data = data.loc[
-        data["event_date"].between(relevant_start, relevant_end)
-    ]
+    data = data.loc[data["event_date"].between(relevant_start, relevant_end)]
     data = add_daily_flags(data)
 
     feature_parts = []
@@ -531,9 +510,7 @@ def build_chunk_features(data, cutoff, make_target):
         target_start = cutoff + pd.Timedelta(days=1)
         target_end = cutoff + pd.Timedelta(days=30)
         target = (
-            data.loc[
-                data["event_date"].between(target_start, target_end)
-            ]
+            data.loc[data["event_date"].between(target_start, target_end)]
             .groupby("user_id", sort=False)["gmv"]
             .sum()
             .rename("target")
@@ -578,17 +555,15 @@ def add_block_statistics(total, derived):
         derived[f"{metric}_zero_block_share"] = 1 - (
             nonzero_count / NUMBER_OF_BLOCKS
         )
-        derived[f"{metric}_positive_block_mean"] = (
-            values.sum(axis=1)
-            / np.maximum(nonzero_count, 1)
-        )
+        derived[f"{metric}_positive_block_mean"] = values.sum(
+            axis=1
+        ) / np.maximum(nonzero_count, 1)
         derived[f"{metric}_block_slope"] = (
             values @ slope_weights / slope_denominator
         )
         derived[f"{metric}_block_ewm"] = values @ recent_weights
-        derived[f"{metric}_recent_to_block_mean"] = (
-            (values[:, 0] + 1)
-            / (values.mean(axis=1) + 1)
+        derived[f"{metric}_recent_to_block_mean"] = (values[:, 0] + 1) / (
+            values.mean(axis=1) + 1
         )
 
         zero = ~nonzero
@@ -602,11 +577,12 @@ def add_block_statistics(total, derived):
 
 
 def add_derived_features(total):
-    """Считает отношения только после получения полной истории пользователя."""
+    """Считает отношения и цикличные признаки только после получения полной истории пользователя."""
 
     derived = {}
     internal_columns = []
 
+    # --- 1. Производные агрегаты по окнам ---
     for days in WINDOWS:
         gmv = total[f"gmv_{days}d"]
         items = total[f"items_bought_{days}d"]
@@ -617,22 +593,12 @@ def add_derived_features(total):
         cart_days = total[f"cart_days_{days}d"]
 
         derived[f"gmv_per_item_{days}d"] = safe_ratio(gmv, items)
-        derived[f"gmv_per_order_day_{days}d"] = safe_ratio(
-            gmv,
-            order_days,
-        )
-        derived[f"items_per_order_day_{days}d"] = safe_ratio(
-            items,
-            order_days,
-        )
+        derived[f"gmv_per_order_day_{days}d"] = safe_ratio(gmv, order_days)
+        derived[f"items_per_order_day_{days}d"] = safe_ratio(items, order_days)
         derived[f"items_per_active_day_{days}d"] = safe_ratio(
-            items,
-            active_days,
+            items, active_days
         )
-        derived[f"cart_to_order_conversion_{days}d"] = safe_ratio(
-            items,
-            carts,
-        )
+        derived[f"cart_to_order_conversion_{days}d"] = safe_ratio(items, carts)
         derived[f"search_cart_to_order_conversion_{days}d"] = safe_ratio(
             total[f"search_items_bought_{days}d"],
             total[f"search_items_added_to_cart_{days}d"],
@@ -642,50 +608,40 @@ def add_derived_features(total):
             total[f"cat_items_added_to_cart_{days}d"],
         )
         derived[f"search_query_to_cart_conversion_{days}d"] = safe_ratio(
-            total[f"search_items_added_to_cart_{days}d"],
-            searches,
+            total[f"search_items_added_to_cart_{days}d"], searches
         )
         derived[f"search_query_to_order_conversion_{days}d"] = safe_ratio(
-            total[f"search_items_bought_{days}d"],
-            searches,
+            total[f"search_items_bought_{days}d"], searches
         )
         derived[f"searches_per_search_day_{days}d"] = safe_ratio(
-            searches,
-            total[f"search_days_{days}d"],
+            searches, total[f"search_days_{days}d"]
         )
 
         derived[f"recorded_zero_days_{days}d"] = (
             total[f"recorded_days_{days}d"] - active_days
         ).clip(lower=0)
         derived[f"order_days_per_active_day_{days}d"] = safe_ratio(
-            order_days,
-            active_days,
+            order_days, active_days
         )
         derived[f"active_without_order_share_{days}d"] = safe_ratio(
-            total[f"active_without_order_days_{days}d"],
-            active_days,
+            total[f"active_without_order_days_{days}d"], active_days
         )
         derived[f"cart_without_order_share_{days}d"] = safe_ratio(
-            total[f"cart_without_order_days_{days}d"],
-            cart_days,
+            total[f"cart_without_order_days_{days}d"], cart_days
         )
         derived[f"search_gmv_share_{days}d"] = safe_ratio(
-            total[f"gmv_search_{days}d"],
-            gmv,
+            total[f"gmv_search_{days}d"], gmv
         )
         derived[f"search_items_share_{days}d"] = safe_ratio(
-            total[f"search_items_bought_{days}d"],
-            items,
+            total[f"search_items_bought_{days}d"], items
         )
         derived[f"search_cart_share_{days}d"] = safe_ratio(
-            total[f"search_items_added_to_cart_{days}d"],
-            carts,
+            total[f"search_items_added_to_cart_{days}d"], carts
         )
 
         calendar_gmv_mean = gmv / days
         calendar_gmv_variance = (
-            total[f"gmv_square_sum_{days}d"] / days
-            - calendar_gmv_mean.pow(2)
+            total[f"gmv_square_sum_{days}d"] / days - calendar_gmv_mean.pow(2)
         ).clip(lower=0)
         calendar_items_mean = items / days
         calendar_items_variance = (
@@ -701,8 +657,7 @@ def add_derived_features(total):
         gmv_std = np.sqrt(calendar_gmv_variance)
         derived[f"daily_gmv_std_{days}d"] = gmv_std
         derived[f"daily_gmv_cv_{days}d"] = safe_ratio(
-            gmv_std,
-            calendar_gmv_mean + 1,
+            gmv_std, calendar_gmv_mean + 1
         )
         derived[f"daily_items_bought_std_{days}d"] = np.sqrt(
             calendar_items_variance
@@ -711,8 +666,7 @@ def add_derived_features(total):
             calendar_searches_variance
         )
         derived[f"max_daily_gmv_share_{days}d"] = safe_ratio(
-            total[f"max_daily_gmv_{days}d"],
-            gmv,
+            total[f"max_daily_gmv_{days}d"], gmv
         )
 
         internal_columns.extend(
@@ -725,18 +679,17 @@ def add_derived_features(total):
 
     for days in (90, 180, 270):
         derived[f"weekend_gmv_share_{days}d"] = safe_ratio(
-            total[f"weekend_gmv_{days}d"],
-            total[f"gmv_{days}d"],
+            total[f"weekend_gmv_{days}d"], total[f"gmv_{days}d"]
         )
         derived[f"weekend_items_share_{days}d"] = safe_ratio(
             total[f"weekend_items_bought_{days}d"],
             total[f"items_bought_{days}d"],
         )
         derived[f"weekend_activity_share_{days}d"] = safe_ratio(
-            total[f"weekend_active_days_{days}d"],
-            total[f"active_days_{days}d"],
+            total[f"weekend_active_days_{days}d"], total[f"active_days_{days}d"]
         )
 
+    # --- 2. Тренд-метрики ---
     trend_metrics = (
         "gmv",
         "items_bought",
@@ -747,75 +700,53 @@ def add_derived_features(total):
     )
     for metric in trend_metrics:
         recent_7 = total[f"{metric}_7d"]
-        previous_7 = (
-            total[f"{metric}_14d"] - recent_7
-        ).clip(lower=0)
+        previous_7 = (total[f"{metric}_14d"] - recent_7).clip(lower=0)
         recent_30 = total[f"{metric}_30d"]
-        previous_30 = (
-            total[f"{metric}_60d"] - recent_30
-        ).clip(lower=0)
+        previous_30 = (total[f"{metric}_60d"] - recent_30).clip(lower=0)
         recent_90 = total[f"{metric}_90d"]
-        previous_90 = (
-            total[f"{metric}_180d"] - recent_90
-        ).clip(lower=0)
-        older_150 = (
-            total[f"{metric}_180d"] - recent_30
-        ).clip(lower=0)
+        previous_90 = (total[f"{metric}_180d"] - recent_90).clip(lower=0)
+        older_150 = (total[f"{metric}_180d"] - recent_30).clip(lower=0)
 
         derived[f"{metric}_trend_7_vs_previous_7"] = bounded_change(
-            recent_7,
-            previous_7,
+            recent_7, previous_7
         )
         derived[f"{metric}_trend_30_vs_previous_30"] = bounded_change(
-            recent_30,
-            previous_30,
+            recent_30, previous_30
         )
         derived[f"{metric}_trend_90_vs_previous_90"] = bounded_change(
-            recent_90,
-            previous_90,
+            recent_90, previous_90
         )
         derived[f"{metric}_recent_30_share_180"] = safe_ratio(
-            recent_30,
-            total[f"{metric}_180d"],
+            recent_30, total[f"{metric}_180d"]
         )
         derived[f"{metric}_rate_trend_30_vs_older_150"] = bounded_change(
-            recent_30 / 30,
-            older_150 / 150,
+            recent_30 / 30.0, older_150 / 150.0
         )
 
-    # Сохраняем знакомые имена текущих trend-признаков.
     derived["items_trend_30_180"] = safe_ratio(
-        total["items_bought_30d"] + 1,
-        total["items_bought_180d"] / 6 + 1,
+        total["items_bought_30d"] + 1, total["items_bought_180d"] / 6.0 + 1
     )
     derived["gmv_trend_30_180"] = safe_ratio(
-        total["gmv_30d"] + 1,
-        total["gmv_180d"] / 6 + 1,
+        total["gmv_30d"] + 1, total["gmv_180d"] / 6.0 + 1
     )
     derived["items_trend_90_180"] = safe_ratio(
-        total["items_bought_90d"] + 1,
-        total["items_bought_180d"] / 2 + 1,
+        total["items_bought_90d"] + 1, total["items_bought_180d"] / 2.0 + 1
     )
     derived["gmv_trend_90_180"] = safe_ratio(
-        total["gmv_90d"] + 1,
-        total["gmv_180d"] / 2 + 1,
+        total["gmv_90d"] + 1, total["gmv_180d"] / 2.0 + 1
     )
 
     search_gmv_share_30 = safe_ratio(
-        total["gmv_search_30d"],
-        total["gmv_30d"],
+        total["gmv_search_30d"], total["gmv_30d"]
     )
     search_gmv_share_180 = safe_ratio(
-        total["gmv_search_180d"],
-        total["gmv_180d"],
+        total["gmv_search_180d"], total["gmv_180d"]
     )
     total_conversion_30 = safe_ratio(
-        total["items_bought_30d"],
-        total["items_added_to_cart_30d"],
+        total["items_bought_30d"], total["items_added_to_cart_30d"]
     )
     total_conversion_180 = safe_ratio(
-        total["items_bought_180d"],
-        total["items_added_to_cart_180d"],
+        total["items_bought_180d"], total["items_added_to_cart_180d"]
     )
     search_conversion_30 = safe_ratio(
         total["search_items_bought_30d"],
@@ -826,13 +757,12 @@ def add_derived_features(total):
         total["search_items_added_to_cart_180d"],
     )
     cat_conversion_30 = safe_ratio(
-        total["cat_items_bought_30d"],
-        total["cat_items_added_to_cart_30d"],
+        total["cat_items_bought_30d"], total["cat_items_added_to_cart_30d"]
     )
     cat_conversion_180 = safe_ratio(
-        total["cat_items_bought_180d"],
-        total["cat_items_added_to_cart_180d"],
+        total["cat_items_bought_180d"], total["cat_items_added_to_cart_180d"]
     )
+
     derived["search_gmv_share_change_30_vs_180"] = (
         search_gmv_share_30 - search_gmv_share_180
     )
@@ -853,74 +783,144 @@ def add_derived_features(total):
         mean_gap = total[f"{event_name}_gap_mean_{RECENCY_WINDOW}d"]
         std_gap = total[f"{event_name}_gap_std_{RECENCY_WINDOW}d"]
         derived[f"{event_name}_gap_cv_{RECENCY_WINDOW}d"] = safe_ratio(
-            std_gap,
-            mean_gap + 1,
+            std_gap, mean_gap + 1
         )
         derived[f"{event_name}_burstiness_{RECENCY_WINDOW}d"] = (
-            (std_gap - mean_gap)
-            / (std_gap + mean_gap + 1)
-        )
+            std_gap - mean_gap
+        ) / (std_gap + mean_gap + 1)
 
+    # --- 3. BTYD & Покупные флаги ---
     order_age = total[f"days_since_first_order_{RECENCY_WINDOW}d"]
     order_recency = total[f"days_since_last_order_{RECENCY_WINDOW}d"]
     order_frequency = total[f"order_days_{RECENCY_WINDOW}d"]
-    derived[f"is_seen_{RECENCY_WINDOW}d"] = (
-        1 - total[f"never_activity_{RECENCY_WINDOW}d"]
+
+    has_order_history = (1 - total[f"never_order_{RECENCY_WINDOW}d"]).astype(
+        "int8"
     )
-    derived[f"btyd_frequency_{RECENCY_WINDOW}d"] = (
-        order_frequency - 1
-    ).clip(lower=0)
+    has_valid_order_gap = (order_frequency >= 2).astype("int8")
+    has_single_order = (order_frequency == 1).astype("int8")
+
+    derived["has_order_history"] = has_order_history
+    derived["has_valid_order_gap"] = has_valid_order_gap
+    derived["has_single_order"] = has_single_order
+
+    derived["is_seen_270d"] = 1 - total[f"never_activity_{RECENCY_WINDOW}d"]
+    derived[f"btyd_frequency_{RECENCY_WINDOW}d"] = (order_frequency - 1).clip(
+        lower=0
+    )
     derived[f"btyd_recency_{RECENCY_WINDOW}d"] = total[
         f"order_span_{RECENCY_WINDOW}d"
     ]
     derived[f"btyd_T_{RECENCY_WINDOW}d"] = order_age
     derived[f"order_frequency_per_age_{RECENCY_WINDOW}d"] = safe_ratio(
-        order_frequency,
-        order_age + 1,
+        order_frequency, order_age + 1
     )
     derived[f"order_recency_to_age_{RECENCY_WINDOW}d"] = safe_ratio(
-        order_recency,
-        order_age + 1,
+        order_recency, order_age + 1
     )
     derived[f"order_frequency_per_recency_{RECENCY_WINDOW}d"] = safe_ratio(
-        order_frequency,
-        order_recency + 1,
+        order_frequency, order_recency + 1
     )
 
+    # Признаки строго для юзеров с 1 покупкой
+    derived[f"has_single_order_{RECENCY_WINDOW}d"] = has_single_order
+    derived[f"days_since_only_order_{RECENCY_WINDOW}d"] = np.where(
+        has_single_order == 1, order_recency, 0.0
+    ).astype("float32")
+    derived[f"single_order_gmv_{RECENCY_WINDOW}d"] = np.where(
+        has_single_order == 1, total[f"gmv_{RECENCY_WINDOW}d"], 0.0
+    ).astype("float32")
+
+    # --- 4. Исправленные Cadence / Cycle-признаки (Только если order_frequency >= 2) ---
+    order_median_gap = total[f"order_gap_median_{RECENCY_WINDOW}d"]
+    order_mean_gap = total[f"order_gap_mean_{RECENCY_WINDOW}d"]
+    order_last_gap = total[f"order_gap_last_{RECENCY_WINDOW}d"]
+    order_iqr_gap = total[f"order_gap_iqr_{RECENCY_WINDOW}d"]
+    order_q90_gap = total[f"order_gap_q90_{RECENCY_WINDOW}d"]
+
+    overdue_days_raw = (order_recency - order_median_gap).clip(lower=0)
+    days_to_expected_raw = (order_median_gap - order_recency).clip(lower=0)
+
+    derived["order_overdue_days"] = np.where(
+        has_valid_order_gap == 1, overdue_days_raw, 0.0
+    ).astype("float32")
+    derived["order_days_to_expected"] = np.where(
+        has_valid_order_gap == 1, days_to_expected_raw, 0.0
+    ).astype("float32")
+    derived["order_overdue_ratio"] = np.where(
+        has_valid_order_gap == 1,
+        safe_ratio(order_recency, order_median_gap + 1e-5),
+        0.0,
+    ).astype("float32")
+    derived["order_expected_within_30d"] = np.where(
+        has_valid_order_gap == 1,
+        (days_to_expected_raw <= 30).astype("float32"),
+        0.0,
+    ).astype("float32")
+    derived["order_cycle_phase"] = np.where(
+        has_valid_order_gap == 1,
+        safe_ratio(order_recency, order_median_gap + 1e-5),
+        0.0,
+    ).astype("float32")
+
+    derived["order_last_gap_to_median"] = np.where(
+        has_valid_order_gap == 1,
+        safe_ratio(order_last_gap, order_median_gap + 1e-5),
+        0.0,
+    ).astype("float32")
+    derived["order_last_gap_to_mean"] = np.where(
+        has_valid_order_gap == 1,
+        safe_ratio(order_last_gap, order_mean_gap + 1e-5),
+        0.0,
+    ).astype("float32")
+    derived["order_gap_iqr"] = np.where(
+        has_valid_order_gap == 1, order_iqr_gap, 0.0
+    ).astype("float32")
+    derived["order_gap_q90_to_median"] = np.where(
+        has_valid_order_gap == 1,
+        safe_ratio(order_q90_gap, order_median_gap + 1e-5),
+        0.0,
+    ).astype("float32")
+
+    base_expected_30d = safe_ratio(30.0, order_median_gap + 1e-5)
+    derived["expected_orders_next_30d"] = np.where(
+        has_valid_order_gap == 1, base_expected_30d, 0.0
+    ).astype("float32")
+
+    overdue_decay = np.exp(
+        -safe_ratio(overdue_days_raw, order_median_gap + 1e-5)
+    )
+    derived["expected_orders_next_30d_with_overdue"] = np.where(
+        has_valid_order_gap == 1, base_expected_30d * overdue_decay, 0.0
+    ).astype("float32")
+
+    # --- 5. Поведенческие намерения ---
     derived["engaged_nonbuyer_30d"] = (
-        total["active_days_30d"].gt(0)
-        & total["order_days_30d"].eq(0)
+        total["active_days_30d"].gt(0) & total["order_days_30d"].eq(0)
     ).astype("int8")
     derived["recent_cart_without_order_30d"] = (
-        total["cart_days_30d"].gt(0)
-        & total["order_days_30d"].eq(0)
+        total["cart_days_30d"].gt(0) & total["order_days_30d"].eq(0)
     ).astype("int8")
     derived["expected_gmv_from_recent_cart_30d"] = (
         total["items_added_to_cart_30d"]
         * safe_ratio(
-            total["items_bought_180d"],
-            total["items_added_to_cart_180d"],
+            total["items_bought_180d"], total["items_added_to_cart_180d"]
         )
-        * safe_ratio(
-            total["gmv_180d"],
-            total["items_bought_180d"],
-        )
+        * safe_ratio(total["gmv_180d"], total["items_bought_180d"])
     )
     derived["search_intent_value_30d"] = (
         total["searches_30d"]
         * safe_ratio(
-            total["search_items_bought_180d"],
-            total["searches_180d"],
+            total["search_items_bought_180d"], total["searches_180d"]
         )
         * safe_ratio(
-            total["gmv_search_180d"],
-            total["search_items_bought_180d"],
+            total["gmv_search_180d"], total["search_items_bought_180d"]
         )
     )
 
     add_block_statistics(total, derived)
 
-    total = total.drop(columns=internal_columns)
+    total = total.drop(columns=internal_columns, errors="ignore")
     derived_frame = pd.DataFrame(derived, index=total.index)
     return pd.concat([total, derived_frame], axis=1, copy=False)
 
@@ -930,9 +930,7 @@ def reduce_memory(total):
 
     excluded = {"user_id", "cutoff_date", "target"}
     feature_columns = [
-        column
-        for column in total.columns
-        if column not in excluded
+        column for column in total.columns if column not in excluded
     ]
     total[feature_columns] = (
         total[feature_columns]
