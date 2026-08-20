@@ -1,6 +1,7 @@
 
 
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,8 @@ EWM_COLUMNS = ["gmv", "searches", "to_cart", "to_ord"]
 EWM_HALF_LIVES = [7, 30]
 
 RECENCY_COLUMNS = ["gmv", "searches", "to_cart", "to_ord"]
+CUTOFF_STATE_COLUMN = "cutoff_state_row"
+CUTOFF_PATTERN = re.compile(r"sequence_cutoff(\d{4}-\d{2}-\d{2})")
 
 BASE_DIR = Path(__file__).resolve().parent
 SOURCE_DIR = BASE_DIR / "data_sequence"
@@ -67,12 +70,79 @@ def bounded_change(recent, previous):
     )
 
 
+def infer_cutoff_from_file_name(file_name):
+    """Достать cutoff из имени sequence_cutoffYYYY-MM-DD.parquet."""
+    match = CUTOFF_PATTERN.search(str(file_name))
+
+    if match is None:
+        return None
+
+    return pd.Timestamp(match.group(1))
+
+
+def infer_cutoff_from_data(df):
+    """Восстановить cutoff как последний календарный день истории."""
+    real_mask = df["day_index"].ge(0) & df["event_date"].notna()
+
+    if not real_mask.any():
+        return None
+
+    history_starts = (
+        df.loc[real_mask, "event_date"]
+        - pd.to_timedelta(df.loc[real_mask, "day_index"], unit="D")
+    ).dt.normalize()
+    history_start = history_starts.mode().iloc[0]
+
+    return history_start + pd.Timedelta(days=HISTORY_DAYS - 1)
+
+
+def add_cutoff_state_rows(df, cutoff=None):
+    """Добавить synthetic row на cutoff, если у пользователя нет строки day 179."""
+    df[CUTOFF_STATE_COLUMN] = 0.0
+
+    if cutoff is None:
+        cutoff = infer_cutoff_from_data(df)
+
+    if cutoff is None:
+        return df
+
+    users_with_cutoff_row = df.loc[
+        df["day_index"].eq(HISTORY_DAYS - 1),
+        "user_id",
+    ].drop_duplicates()
+
+    first_user_rows = df.drop_duplicates("user_id", keep="first")
+    needs_cutoff_row = ~first_user_rows["user_id"].isin(users_with_cutoff_row)
+
+    if not needs_cutoff_row.any():
+        return df
+
+    synthetic_rows = first_user_rows.loc[needs_cutoff_row].copy()
+    synthetic_rows["event_date"] = pd.Timestamp(cutoff)
+    synthetic_rows["day_index"] = HISTORY_DAYS - 1
+    synthetic_rows[CUTOFF_STATE_COLUMN] = 1.0
+
+    value_columns = [
+        column
+        for column in REQUIRED_COLUMNS
+        if column not in {"event_date", "user_id", "day_index"}
+    ]
+    synthetic_rows[value_columns] = 0.0
+
+    return pd.concat(
+        [df, synthetic_rows],
+        ignore_index=True,
+        copy=False,
+    )
+
+
 def add_calendar_features(df):
     """Календарь и расстояние между записанными днями."""
     real_mask = df["day_index"] >= 0
+    observed_mask = real_mask & df[CUTOFF_STATE_COLUMN].eq(0)
     real = df.loc[real_mask]
 
-    df["observed_day"] = real_mask.astype("float32")
+    df["observed_day"] = observed_mask.astype("float32")
     df["day_index_norm"] = 0.0
     df.loc[real_mask, "day_index_norm"] = (
         real["day_index"] / (HISTORY_DAYS - 1)
@@ -111,10 +181,15 @@ def add_calendar_features(df):
 def add_lag_features(df):
     """Лаги по календарным дням, а не по предыдущей строке."""
     real_mask = df["day_index"] >= 0
+    observed_mask = real_mask & df[CUTOFF_STATE_COLUMN].eq(0)
     real = df.loc[real_mask]
+    observed = df.loc[observed_mask]
 
     key = pd.MultiIndex.from_frame(real[["user_id", "day_index"]])
-    observed_lookup = pd.Series(1.0, index=key)
+    observed_key = pd.MultiIndex.from_frame(
+        observed[["user_id", "day_index"]]
+    )
+    observed_lookup = pd.Series(1.0, index=observed_key)
 
     for lag in LAGS:
         wanted_key = pd.MultiIndex.from_arrays(
@@ -324,7 +399,7 @@ def add_ratio_features(df):
         df.loc[real_mask, name] = values
 
 
-def build_sequence_features(sequence_df):
+def build_sequence_features(sequence_df, cutoff=None):
     """Построить все признаки только из текущего дня и прошлого."""
     missing = [
         column for column in REQUIRED_COLUMNS
@@ -348,6 +423,12 @@ def build_sequence_features(sequence_df):
         raise ValueError("Есть дубли user_id + day_index")
 
     old_columns = set(df.columns)
+
+    df = add_cutoff_state_rows(df, cutoff=cutoff)
+    df = df.sort_values(
+        ["user_id", "day_index"],
+        kind="stable",
+    ).reset_index(drop=True)
 
     add_calendar_features(df)
     add_lag_features(df)
@@ -414,6 +495,7 @@ def create_feature_file(
 
     input_path = SOURCE_DIR / input_file
     output_path = OUTPUT_DIR / output_file
+    cutoff = infer_cutoff_from_file_name(input_file)
 
     if output_path.exists() and not OVERWRITE:
         raise FileExistsError(
@@ -432,7 +514,10 @@ def create_feature_file(
             read_user_batches(input_path, BATCH_SIZE),
             start=1,
         ):
-            featured_batch, feature_columns = build_sequence_features(batch)
+            featured_batch, feature_columns = build_sequence_features(
+                batch,
+                cutoff=cutoff,
+            )
             table = pa.Table.from_pandas(featured_batch, preserve_index=False)
 
             if writer is None:

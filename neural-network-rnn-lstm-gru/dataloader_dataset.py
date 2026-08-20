@@ -9,24 +9,36 @@ class MyDataset(Dataset):
         if len(data) == 0:
             raise ValueError("Пустой датасет")
 
+        data = data.sort_values(
+            ["user_id", "day_index"],
+            kind="stable",
+        ).reset_index(drop=True)
+
+        duplicate_mask = (
+            data.loc[data["day_index"].ge(0)]
+            .duplicated(["user_id", "day_index"])
+        )
+        if duplicate_mask.any():
+            raise ValueError("Есть дубли user_id + day_index")
+
         self.feature_columns = [
             column
             for column in data.columns
             if column not in [
-                'user_id',
-                'target',
-                'day_index',
-                'event_date',
+                "user_id",
+                "target",
+                "day_index",
+                "event_date",
             ]
         ]
 
-        user_values = data['user_id'].to_numpy()
-        self.day_indices = data['day_index'].to_numpy(dtype=np.int64)
+        user_values = data["user_id"].to_numpy()
+        self.day_indices = data["day_index"].to_numpy(dtype=np.int64)
         self.feature_values = data[self.feature_columns].to_numpy(
             dtype=np.float32,
             copy=False,
         )
-        self.targets = data['target'].to_numpy(dtype=np.float32)
+        self.targets = data["target"].to_numpy(dtype=np.float32)
 
         user_changes = np.flatnonzero(
             user_values[1:] != user_values[:-1]

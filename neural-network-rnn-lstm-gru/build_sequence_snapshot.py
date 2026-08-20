@@ -92,6 +92,10 @@ def create_dataset(data: pd.DataFrame, cutoffs):
         dataset = pd.concat(
             [dataset, missing_users], ignore_index=True, copy=False
         )
+        dataset = dataset.sort_values(
+            ["user_id", "day_index"],
+            kind="stable",
+        ).reset_index(drop=True)
         Path("data_sequence").mkdir(exist_ok=True)
         output_path = (f"data_sequence/"
                        f"sequence_cutoff{cutoff.date()}.parquet")
