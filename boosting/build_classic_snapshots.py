@@ -508,7 +508,7 @@ def add_timing_and_regularity_features(result, data, cutoff):
         columns="month_phase",
         values="gmv",
         aggfunc="sum",
-        observed = False,
+        observed=False,
     ).reindex(columns=month_phase_labels)
     phase_gmv.columns = [
         f"gmv_month_phase_{phase}_{RECENCY_WINDOW}d"
@@ -990,57 +990,68 @@ def add_derived_features(total):
     has_order_history = (
             1 - total[f"never_order_{RECENCY_WINDOW}d"]
     )
+    has_valid_order_gap = order_frequency.ge(2).astype("int8")
+    has_single_order = order_frequency.eq(1).astype("int8")
+
+    derived[f"has_valid_order_gap_{RECENCY_WINDOW}d"] = has_valid_order_gap
+    derived[f"has_single_order_{RECENCY_WINDOW}d"] = has_single_order
+    derived[f"days_since_only_order_{RECENCY_WINDOW}d"] = (
+            order_recency * has_single_order
+    )
+    derived[f"single_order_gmv_{RECENCY_WINDOW}d"] = (
+            total[f"gmv_{RECENCY_WINDOW}d"] * has_single_order
+    )
 
     derived[f"order_overdue_ratio_{RECENCY_WINDOW}d"] = (
             safe_ratio(order_recency, order_median_gap + 1)
-            * has_order_history
+            * has_valid_order_gap
     )
     derived[f"order_days_to_expected_{RECENCY_WINDOW}d"] = (
             (order_median_gap - order_recency)
-            * has_order_history
+            * has_valid_order_gap
     )
     derived[f"order_overdue_days_{RECENCY_WINDOW}d"] = (
             (order_recency - order_median_gap).clip(lower=0)
-            * has_order_history
+            * has_valid_order_gap
     )
     derived[f"order_expected_within_30d_{RECENCY_WINDOW}d"] = (
             (order_recency + 30 >= order_median_gap)
-            & has_order_history.astype(bool)
+            & has_valid_order_gap.astype(bool)
     ).astype("int8")
     derived[f"order_cycle_phase_{RECENCY_WINDOW}d"] = (
             safe_ratio(order_recency, order_median_gap + 1)
             .clip(upper=5)
-            * has_order_history
+            * has_valid_order_gap
     )
     derived[f"order_last_gap_to_median_{RECENCY_WINDOW}d"] = (
             safe_ratio(order_last_gap, order_median_gap + 1)
-            * has_order_history
+            * has_valid_order_gap
     )
     derived[f"order_last_gap_to_mean_{RECENCY_WINDOW}d"] = (
             safe_ratio(order_last_gap, order_mean_gap + 1)
-            * has_order_history
+            * has_valid_order_gap
     )
     derived[f"order_gap_iqr_{RECENCY_WINDOW}d"] = (
             (order_gap_q75 - order_gap_q25).clip(lower=0)
-            * has_order_history
+            * has_valid_order_gap
     )
     derived[f"order_gap_q90_to_median_{RECENCY_WINDOW}d"] = (
             safe_ratio(order_gap_q90, order_median_gap + 1)
-            * has_order_history
+            * has_valid_order_gap
     )
     derived[f"expected_orders_next_30d_{RECENCY_WINDOW}d"] = (
             safe_ratio(
                 pd.Series(30, index=total.index),
                 order_median_gap + 1,
             )
-            * has_order_history
+            * has_valid_order_gap
     )
     derived[f"expected_orders_next_30d_with_overdue_{RECENCY_WINDOW}d"] = (
             safe_ratio(
                 30 + derived[f"order_overdue_days_{RECENCY_WINDOW}d"],
                 order_median_gap + 1,
             )
-            * has_order_history
+            * has_valid_order_gap
     )
 
     last_1_gmv = total[f"last_1_order_day_gmv_{RECENCY_WINDOW}d"]
