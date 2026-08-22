@@ -23,15 +23,21 @@ class GRUmodel(nn.Module):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.gru = nn.GRU(input_size, hidden_size, batch_first=True)
-        self.linear = nn.Linear(hidden_size, 1)
-        self.dropout = nn.Dropout(0.2)
+        self.gru = nn.GRU(input_size, hidden_size, batch_first=True, dropout=0.15, num_layers=2)
+        self.norm = nn.LayerNorm(hidden_size)
+        self.head = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.GELU(),
+            nn.Linear(hidden_size // 2, 1)
+        )
 
     def forward(self, x):
         output, hidden = self.gru(x)
         last_output = output[:, -1, :]
-        last_output = self.dropout(last_output)
-        return self.linear(last_output).squeeze(-1)
+
+        last_output = self.norm(last_output)
+        return self.head(last_output).squeeze(-1)
 
 
 class ImprovedGRUmodel(nn.Module):
