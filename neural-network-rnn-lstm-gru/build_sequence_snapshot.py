@@ -1,7 +1,7 @@
 import gc
+import os
 
 import pandas as pd
-from pathlib import Path
 
 df = pd.read_parquet(
     "C:/Users/myska/Downloads/train.parquet"
@@ -26,6 +26,7 @@ cutoffs = pd.to_datetime([
     "2025-11-15",
     "2025-12-15",
     "2026-01-14",
+    "2026-02-13",
 ])
 
 
@@ -96,7 +97,7 @@ def create_dataset(data: pd.DataFrame, cutoffs):
             ["user_id", "day_index"],
             kind="stable",
         ).reset_index(drop=True)
-        Path("data_sequence").mkdir(exist_ok=True)
+        os.makedirs("data_sequence", exist_ok=True)
         output_path = (f"data_sequence/"
                        f"sequence_cutoff{cutoff.date()}.parquet")
         dataset.to_parquet(output_path, index=False)
@@ -111,4 +112,4 @@ def create_dataset(data: pd.DataFrame, cutoffs):
 
 
 if __name__ == "__main__":
-    create_dataset(df,  [pd.Timestamp("2026-02-13")])
+    create_dataset(df, cutoffs)
