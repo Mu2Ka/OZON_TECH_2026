@@ -1,8 +1,9 @@
 import gc
+import os
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import root_mean_squared_log_error
+from sklearn.metrics import log_loss, roc_auc_score, root_mean_squared_log_error
 from sklearn.base import clone
 
 
@@ -15,6 +16,8 @@ def train_model_and_validation_catboost(
         sample_weight=None,
         use_user_id=False,
         verbose=100,
+        return_details=False,
+        classifier=False,
 ):
     if isinstance(train_files, dict):
         train_files_weight = train_files
@@ -119,12 +122,59 @@ def train_model_and_validation_catboost(
         valid_data["user_id"] = valid_data["user_id"].astype(str)
 
     y_train = train_data["target"].to_numpy(dtype="float32")
+
+    if classifier:
+        y_train_class = (y_train > 0).astype("int8")
+
+        if validation:
+            y_valid = valid_data["target"].to_numpy(dtype="float32")
+            y_valid_class = (y_valid > 0).astype("int8")
+
+            model.fit(
+                train_data[model_features],
+                y_train_class,
+                eval_set=(valid_data[model_features], y_valid_class),
+                early_stopping_rounds=150,
+                use_best_model=True,
+                verbose=verbose,
+                sample_weight=sample_weight,
+                cat_features=cat_features,
+            )
+        else:
+            model.fit(
+                train_data[model_features],
+                y_train_class,
+                verbose=verbose,
+                sample_weight=sample_weight,
+                cat_features=cat_features,
+            )
+
+        prediction = model.predict_proba(valid_data[model_features])[:, 1]
+
+        submission = pd.DataFrame({
+            "user_id": submission_user_id,
+            "predict": prediction,
+        })
+
+        if validation:
+            metrics = {
+                "auc": roc_auc_score(y_valid_class, prediction),
+                "logloss": log_loss(y_valid_class, prediction),
+            }
+
+            if return_details:
+                submission["target"] = y_valid
+                submission["target_positive"] = y_valid_class
+
+            return submission, metrics
+
+        return submission
+
     y_train_log = np.log1p(y_train)
 
     if validation:
         y_valid = valid_data["target"].to_numpy(dtype="float32")
         y_valid_log = np.log1p(y_valid)
-
         model.fit(
             train_data[model_features],
             y_train_log,
@@ -157,6 +207,10 @@ def train_model_and_validation_catboost(
     })
 
     if validation:
+        if return_details:
+            submission["target"] = y_valid
+            submission["predict_log"] = prediction_log
+
         catboost_rmsle = root_mean_squared_log_error(
             y_valid,
             prediction,
@@ -176,11 +230,20 @@ def test_new_experiment(
         verbose=100,
         baseline=None,
         min_improvement=0.001,
+        save_fold_predictions=False,
+        output_dir="result_on_fold",
+        output_file="catboost_fold_predictions.csv",
+        classifier=False,
 ):
     result = []
+    logloss_result = []
+
+    if save_fold_predictions:
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, output_file)
 
     for validation_index in range(2, len(train_files)):
-        submission, rmsle = train_model_and_validation_catboost(
+        submission, metric = train_model_and_validation_catboost(
             clone(model),
             train_files[:validation_index],
             train_files[validation_index],
@@ -188,11 +251,75 @@ def test_new_experiment(
             sample_weight=sample_weight,
             use_user_id=use_user_id,
             verbose=verbose,
+            return_details=save_fold_predictions,
+            classifier=classifier,
         )
+
+        if save_fold_predictions:
+            fold = validation_index - 1
+            validation_file = train_files[validation_index]
+            snapshot_name = os.path.basename(validation_file).replace(".parquet", "")
+
+            if classifier:
+                fold_predictions = pd.DataFrame({
+                    "user_id": submission["user_id"].to_numpy(),
+                    "fold": fold,
+                    "snapshot_name": snapshot_name,
+                    "target_true": submission["target"].to_numpy(),
+                    "target_positive_true": submission["target_positive"].to_numpy(),
+                    "pred_positive_probability": submission["predict"].to_numpy(),
+                    "auc": metric["auc"],
+                    "logloss": metric["logloss"],
+                })
+            else:
+                fold_predictions = pd.DataFrame({
+                    "user_id": submission["user_id"].to_numpy(),
+                    "fold": fold,
+                    "snapshot_name": snapshot_name,
+                    "target_true": submission["target"].to_numpy(),
+                    "pred_log": submission["predict_log"].to_numpy(),
+                    "pred_expm1": submission["predict"].to_numpy(),
+                    "rmsle": metric,
+                })
+
+            if fold == 1:
+                fold_predictions.to_csv(
+                    output_path,
+                    index=False,
+                )
+            else:
+                fold_predictions.to_csv(
+                    output_path,
+                    mode="a",
+                    header=False,
+                    index=False,
+                )
+
+            print(f"Saved fold {fold} predictions: {output_path}")
+
         del submission
         gc.collect()
-        result.append(rmsle)
-        print(f"Fold {validation_index - 1}: RMSLE={rmsle}")
+        if classifier:
+            result.append(metric["auc"])
+            logloss_result.append(metric["logloss"])
+            print(
+                f"Fold {validation_index - 1}: "
+                f"AUC={metric['auc']}; Logloss={metric['logloss']}"
+            )
+        else:
+            result.append(metric)
+            print(f"Fold {validation_index - 1}: RMSLE={metric}")
+
+    if classifier:
+        mean_auc = float(np.mean(result))
+        mean_logloss = float(np.mean(logloss_result))
+        print(f"Mean AUC={mean_auc}")
+        print(f"Mean Logloss={mean_logloss}")
+
+        return {
+            "auc": mean_auc,
+            "logloss": mean_logloss,
+        }
 
     mean = float(np.mean(result))
     print(f"Mean RMSLE={mean}")
