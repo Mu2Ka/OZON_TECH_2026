@@ -18,7 +18,11 @@ def train_model_and_validation_catboost(
         verbose=100,
         return_details=False,
         classifier=False,
+        positive_only=False,
 ):
+    if classifier and positive_only:
+        raise ValueError("positive_only нельзя использовать вместе с classifier")
+
     if isinstance(train_files, dict):
         train_files_weight = train_files
         train_files = list(train_files_weight.keys())
@@ -97,6 +101,14 @@ def train_model_and_validation_catboost(
         del data_part
         del part_weights
         gc.collect()
+
+    if positive_only:
+        positive_mask = train_data["target"].gt(0).to_numpy()
+
+        if sample_weight is not None:
+            sample_weight = sample_weight[positive_mask]
+
+        train_data = train_data.loc[positive_mask].reset_index(drop=True)
 
     if validation:
         valid_data = pd.read_parquet(
@@ -234,6 +246,7 @@ def test_new_experiment(
         output_dir="result_on_fold",
         output_file="catboost_fold_predictions.csv",
         classifier=False,
+        positive_only=False,
 ):
     result = []
     logloss_result = []
@@ -253,6 +266,7 @@ def test_new_experiment(
             verbose=verbose,
             return_details=save_fold_predictions,
             classifier=classifier,
+            positive_only=positive_only,
         )
 
         if save_fold_predictions:
