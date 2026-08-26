@@ -27,6 +27,13 @@ neural-network-rnn-lstm-gru/data_sequence/
 # Temporary predictions
 test_for_us_predictions*.csv
 hren.csv
+result_on_fold/
+stacking_submissions/
+stacking_dataset_clean/
+stacking_dataset_clean.zip
+final_stack_4_variants/
+catboost_meta_tuning/
+*_submissions.zip
 
 # Trained models and training artifacts
 *.cbm

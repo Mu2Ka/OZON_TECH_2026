@@ -19,9 +19,13 @@ def train_model_and_validation_catboost(
         return_details=False,
         classifier=False,
         positive_only=False,
+        model_type="catboost",
 ):
     if classifier and positive_only:
         raise ValueError("positive_only нельзя использовать вместе с classifier")
+
+    if use_user_id and model_type != "catboost":
+        raise ValueError("use_user_id поддержан только для catboost")
 
     if isinstance(train_files, dict):
         train_files_weight = train_files
@@ -142,23 +146,26 @@ def train_model_and_validation_catboost(
             y_valid = valid_data["target"].to_numpy(dtype="float32")
             y_valid_class = (y_valid > 0).astype("int8")
 
-            model.fit(
-                train_data[model_features],
-                y_train_class,
-                eval_set=(valid_data[model_features], y_valid_class),
-                early_stopping_rounds=150,
-                use_best_model=True,
-                verbose=verbose,
+            fit_model(
+                model=model,
+                model_type=model_type,
+                x_train=train_data[model_features],
+                y_train=y_train_class,
+                x_valid=valid_data[model_features],
+                y_valid=y_valid_class,
                 sample_weight=sample_weight,
                 cat_features=cat_features,
+                verbose=verbose,
             )
         else:
-            model.fit(
-                train_data[model_features],
-                y_train_class,
-                verbose=verbose,
+            fit_model(
+                model=model,
+                model_type=model_type,
+                x_train=train_data[model_features],
+                y_train=y_train_class,
                 sample_weight=sample_weight,
                 cat_features=cat_features,
+                verbose=verbose,
             )
 
         prediction = model.predict_proba(valid_data[model_features])[:, 1]
@@ -187,23 +194,26 @@ def train_model_and_validation_catboost(
     if validation:
         y_valid = valid_data["target"].to_numpy(dtype="float32")
         y_valid_log = np.log1p(y_valid)
-        model.fit(
-            train_data[model_features],
-            y_train_log,
-            eval_set=(valid_data[model_features], y_valid_log),
-            early_stopping_rounds=150,
-            use_best_model=True,
-            verbose=verbose,
+        fit_model(
+            model=model,
+            model_type=model_type,
+            x_train=train_data[model_features],
+            y_train=y_train_log,
+            x_valid=valid_data[model_features],
+            y_valid=y_valid_log,
             sample_weight=sample_weight,
             cat_features=cat_features,
+            verbose=verbose,
         )
     else:
-        model.fit(
-            train_data[model_features],
-            y_train_log,
-            verbose=verbose,
+        fit_model(
+            model=model,
+            model_type=model_type,
+            x_train=train_data[model_features],
+            y_train=y_train_log,
             sample_weight=sample_weight,
             cat_features=cat_features,
+            verbose=verbose,
         )
 
     prediction_log = model.predict(
@@ -233,6 +243,89 @@ def train_model_and_validation_catboost(
     return submission
 
 
+def fit_model(
+        model,
+        model_type,
+        x_train,
+        y_train,
+        x_valid=None,
+        y_valid=None,
+        sample_weight=None,
+        cat_features=None,
+        verbose=100,
+):
+    has_validation = x_valid is not None and y_valid is not None
+
+    if model_type == "catboost":
+        if has_validation:
+            model.fit(
+                x_train,
+                y_train,
+                eval_set=(x_valid, y_valid),
+                early_stopping_rounds=150,
+                use_best_model=True,
+                verbose=verbose,
+                sample_weight=sample_weight,
+                cat_features=cat_features,
+            )
+        else:
+            model.fit(
+                x_train,
+                y_train,
+                verbose=verbose,
+                sample_weight=sample_weight,
+                cat_features=cat_features,
+            )
+
+        return model
+
+    if model_type == "lgbm":
+        if has_validation:
+            import lightgbm as lgb
+
+            callbacks = [
+                lgb.early_stopping(150),
+                lgb.log_evaluation(verbose),
+            ]
+
+            model.fit(
+                x_train,
+                y_train,
+                eval_set=[(x_valid, y_valid)],
+                sample_weight=sample_weight,
+                callbacks=callbacks,
+            )
+        else:
+            model.fit(
+                x_train,
+                y_train,
+                sample_weight=sample_weight,
+            )
+
+        return model
+
+    if model_type == "xgboost":
+        if has_validation:
+            model.fit(
+                x_train,
+                y_train,
+                eval_set=[(x_valid, y_valid)],
+                sample_weight=sample_weight,
+                early_stopping_rounds=150,
+                verbose=verbose,
+            )
+        else:
+            model.fit(
+                x_train,
+                y_train,
+                sample_weight=sample_weight,
+            )
+
+        return model
+
+    raise ValueError("model_type должен быть: catboost, lgbm или xgboost")
+
+
 def test_new_experiment(
         model,
         train_files,
@@ -247,6 +340,7 @@ def test_new_experiment(
         output_file="catboost_fold_predictions.csv",
         classifier=False,
         positive_only=False,
+        model_type="catboost",
 ):
     result = []
     logloss_result = []
@@ -267,6 +361,7 @@ def test_new_experiment(
             return_details=save_fold_predictions,
             classifier=classifier,
             positive_only=positive_only,
+            model_type=model_type,
         )
 
         if save_fold_predictions:

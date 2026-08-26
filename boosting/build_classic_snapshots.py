@@ -1233,10 +1233,23 @@ def build_snapshot(cutoff, output_file, make_target=True):
 
 
 if __name__ == "__main__":
-    build_snapshot("2025-08-17", "train_aug_predict_from_2025-08-17.parquet")
-    build_snapshot("2025-09-16", "train_sep_predict_from_2025-09-16.parquet")
-    build_snapshot("2025-10-16", "train_oct_predict_from_2025-10-16.parquet")
-    build_snapshot("2025-11-15", "train_nov_predict_from_2025-11-15.parquet")
-    build_snapshot("2025-12-15", "train_dec_predict_from_2025-12-15.parquet")
-    build_snapshot("2026-01-14", "train_jan_predict_from_2026-01-14.parquet")
+    train_cutoffs = list(
+        pd.date_range(
+            start="2025-08-17",
+            end="2026-01-14",
+            freq="7D",
+        )
+    )
+
+    last_train_cutoff = pd.Timestamp("2026-01-14")
+    if train_cutoffs[-1] != last_train_cutoff:
+        train_cutoffs.append(last_train_cutoff)
+
+    for cutoff in train_cutoffs:
+        cutoff_text = cutoff.strftime("%Y-%m-%d")
+        build_snapshot(
+            cutoff_text,
+            f"train_cutoff_{cutoff_text}.parquet",
+        )
+
     build_snapshot("2026-02-13", "competition_test.parquet", make_target=False)
